@@ -1,0 +1,47 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install libcurl (Ubuntu)
+        if: matrix.os == 'ubuntu-latest'
+        run: sudo apt-get update && sudo apt-get install -y libcurl4-openssl-dev
+
+      - name: Install libcurl (macOS)
+        if: matrix.os == 'macos-latest'
+        run: brew install curl
+
+      - name: Configure
+        run: |
+          mkdir -p build
+          cd build
+          cmake .. -DAUDD_BUILD_TESTS=ON -DAUDD_BUILD_EXAMPLES=ON
+
+      - name: Build
+        run: cmake --build build -j
+
+      - name: Test
+        run: ctest --test-dir build --output-on-failure
+
+  build-cxx20:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: sudo apt-get update && sudo apt-get install -y libcurl4-openssl-dev
+      - run: |
+          mkdir -p build && cd build
+          cmake .. -DAUDD_CXX20=ON -DAUDD_BUILD_TESTS=ON -DAUDD_BUILD_EXAMPLES=ON
+      - run: cmake --build build -j
+      - run: ctest --test-dir build --output-on-failure
