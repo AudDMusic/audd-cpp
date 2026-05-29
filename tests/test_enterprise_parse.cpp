@@ -53,6 +53,50 @@ TEST_CASE("enterprise chunk extras capture unknown song-level keys") {
     CHECK(c.songs[0].extras.at("future_field").get<std::string>() == "future_value");
 }
 
+TEST_CASE("enterprise song omitting score/isrc/upc/label parses without throwing") {
+    // The enterprise endpoint legitimately returns songs with no score and no
+    // isrc/upc/label. Parsing must never throw on these absent fields; the
+    // corresponding members default (score 0, strings empty).
+    auto j = nlohmann::json::parse(R"({
+        "offset": "00:01:00",
+        "songs": [{
+            "timecode": "00:01:00",
+            "artist": "Unknown Artist",
+            "title": "Untitled",
+            "start_offset": 60,
+            "end_offset": 90
+        }]
+    })");
+    audd::EnterpriseChunkResult c;
+    CHECK_NOTHROW(c = parse_enterprise_chunk(j));
+    REQUIRE(c.songs.size() == 1);
+    CHECK(c.songs[0].artist == "Unknown Artist");
+    CHECK(c.songs[0].title == "Untitled");
+    CHECK(c.songs[0].score == 0);       // absent -> default
+    CHECK(c.songs[0].isrc.empty());     // absent -> default
+    CHECK(c.songs[0].upc.empty());      // absent -> default
+    CHECK(c.songs[0].label.empty());    // absent -> default
+    CHECK(c.songs[0].start_offset == 60);
+    CHECK(c.songs[0].end_offset == 90);
+}
+
+TEST_CASE("enterprise song with wrong-typed score does not throw") {
+    // Defensive: even if score arrives as an unexpected JSON type, parsing
+    // must not throw; the field simply defaults.
+    auto j = nlohmann::json::parse(R"({
+        "songs": [{
+            "score": {"unexpected": "object"},
+            "artist": "a",
+            "title": "b"
+        }]
+    })");
+    audd::EnterpriseChunkResult c;
+    CHECK_NOTHROW(c = parse_enterprise_chunk(j));
+    REQUIRE(c.songs.size() == 1);
+    CHECK(c.songs[0].score == 0);
+    CHECK(c.songs[0].artist == "a");
+}
+
 TEST_CASE("enterprise match thumbnail_url") {
     audd::EnterpriseMatch m;
     m.song_link = "https://lis.tn/abcd";

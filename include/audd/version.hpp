@@ -8,7 +8,7 @@
 #ifndef AUDD_VERSION_HPP
 #define AUDD_VERSION_HPP
 
-#define AUDD_VERSION "1.5.10"
+#define AUDD_VERSION "1.5.11"
 
 namespace audd {
 
