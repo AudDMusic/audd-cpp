@@ -9,6 +9,80 @@
 #include "internal/json_parse.hpp"
 
 using audd::internal::parse_enterprise_chunk;
+using audd::internal::offset_to_seconds;
+
+namespace {
+// flatten mirrors the chunk-flattening + offset anchoring performed in
+// AudD::recognize_enterprise: it walks the parsed chunks, computes each
+// match's absolute file position from the chunk offset plus the
+// fragment-relative start_offset/end_offset, and returns the flat vector.
+std::vector<audd::EnterpriseMatch> flatten(const nlohmann::json& result) {
+    std::vector<audd::EnterpriseMatch> out;
+    for (const auto& chunk : result) {
+        auto parsed = parse_enterprise_chunk(chunk);
+        auto base = offset_to_seconds(parsed.offset);
+        for (auto& song : parsed.songs) {
+            if (base) {
+                song.start_seconds = *base + song.start_offset / 1000.0;
+                song.end_seconds   = *base + song.end_offset / 1000.0;
+            }
+            out.push_back(std::move(song));
+        }
+    }
+    return out;
+}
+} // namespace
+
+TEST_CASE("offset_to_seconds parses the documented offset shapes") {
+    using doctest::Approx;
+    CHECK_FALSE(offset_to_seconds("").has_value());
+    CHECK(offset_to_seconds("30").value() == Approx(30.0));
+    CHECK(offset_to_seconds("00:30").value() == Approx(30.0));
+    CHECK(offset_to_seconds("00:01:00").value() == Approx(60.0));
+    CHECK(offset_to_seconds("01:02:03").value() == Approx(3723.0));
+    CHECK(offset_to_seconds("12.5").value() == Approx(12.5));
+    // Unparseable -> nullopt, never throws.
+    CHECK_FALSE(offset_to_seconds("not-a-time").has_value());
+    CHECK_FALSE(offset_to_seconds("1:2:3:4").has_value());
+    CHECK_FALSE(offset_to_seconds("00::30").has_value());
+}
+
+TEST_CASE("enterprise flatten anchors start_seconds/end_seconds to the file") {
+    using doctest::Approx;
+    auto j = nlohmann::json::parse(R"([
+        {
+            "offset": "00:01:00",
+            "songs": [{
+                "artist": "Daft Punk",
+                "title": "Get Lucky",
+                "start_offset": 4200,
+                "end_offset": 11800
+            }]
+        },
+        {
+            "songs": [{
+                "artist": "No Offset",
+                "title": "Untitled",
+                "start_offset": 500,
+                "end_offset": 9000
+            }]
+        }
+    ])");
+    auto matches = flatten(j);
+    REQUIRE(matches.size() == 2);
+
+    // Chunk offset 60s + 4200ms / 11800ms fragment-relative.
+    REQUIRE(matches[0].start_seconds.has_value());
+    REQUIRE(matches[0].end_seconds.has_value());
+    CHECK(matches[0].start_seconds.value() == Approx(64.2));
+    CHECK(matches[0].end_seconds.value() == Approx(71.8));
+
+    // Chunk with no offset -> seconds stay absent; raw offsets still present.
+    CHECK_FALSE(matches[1].start_seconds.has_value());
+    CHECK_FALSE(matches[1].end_seconds.has_value());
+    CHECK(matches[1].start_offset == 500);
+    CHECK(matches[1].end_offset == 9000);
+}
 
 TEST_CASE("enterprise chunk parses songs array") {
     auto j = nlohmann::json::parse(R"({

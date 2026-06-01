@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.16)
-project(audd-cpp VERSION 1.5.11 LANGUAGES CXX)
+project(audd-cpp VERSION 1.5.12 LANGUAGES CXX)
 
 # ---------- options ----------
 option(AUDD_CXX20           "Build with C++20 instead of C++17"        OFF)

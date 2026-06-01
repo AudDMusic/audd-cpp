@@ -200,6 +200,12 @@ struct EnterpriseMatch {
     std::string song_link;
     int         start_offset = 0;
     int         end_offset   = 0;
+    // start_seconds / end_seconds are where the match plays within the user's
+    // file, in seconds: the chunk's file offset plus start_offset / end_offset.
+    // Computed by the SDK (not wire fields); std::nullopt when the chunk
+    // carried no parseable offset.
+    std::optional<double> start_seconds;
+    std::optional<double> end_seconds;
 
     std::map<std::string, nlohmann::json> extras;
     std::string                           raw_response;

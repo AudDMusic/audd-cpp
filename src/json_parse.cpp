@@ -4,8 +4,10 @@
 #include "internal/json_parse.hpp"
 
 #include <algorithm>
+#include <optional>
 #include <set>
 #include <string>
+#include <vector>
 
 #include <audd/error.hpp>
 
@@ -46,6 +48,45 @@ std::int64_t j_int64(const nlohmann::json& j, const std::string& key) {
 }
 
 } // anonymous
+
+std::optional<double> offset_to_seconds(const std::string& offset) {
+    if (offset.empty()) return std::nullopt;
+
+    // Split on ':' into up to three colon-separated components.
+    std::vector<std::string> parts;
+    std::string cur;
+    for (char ch : offset) {
+        if (ch == ':') {
+            parts.push_back(cur);
+            cur.clear();
+        } else {
+            cur.push_back(ch);
+        }
+    }
+    parts.push_back(cur);
+
+    if (parts.empty() || parts.size() > 3) return std::nullopt;
+
+    auto parse_component = [](const std::string& s) -> std::optional<double> {
+        if (s.empty()) return std::nullopt;
+        try {
+            std::size_t consumed = 0;
+            double v = std::stod(s, &consumed);
+            if (consumed != s.size()) return std::nullopt; // trailing junk
+            return v;
+        } catch (const std::exception&) {
+            return std::nullopt;
+        }
+    };
+
+    double total = 0.0;
+    for (const auto& p : parts) {
+        auto v = parse_component(p);
+        if (!v) return std::nullopt;
+        total = total * 60.0 + *v;
+    }
+    return total;
+}
 
 std::map<std::string, nlohmann::json> extract_extras(
     const nlohmann::json& obj,

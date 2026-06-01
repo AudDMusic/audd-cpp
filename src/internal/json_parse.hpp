@@ -4,6 +4,7 @@
 #ifndef AUDD_INTERNAL_JSON_PARSE_HPP
 #define AUDD_INTERNAL_JSON_PARSE_HPP
 
+#include <optional>
 #include <string>
 
 #include <nlohmann/json.hpp>
@@ -40,6 +41,11 @@ StreamCallbackNotification          parse_stream_callback_notification(const nlo
 
 // branded_message extracts an "Artist — Title" string from a result map, if any.
 std::string branded_message(const nlohmann::json& result);
+
+// offset_to_seconds parses an AudD chunk offset string into seconds. Accepts
+// "SS", "MM:SS", "HH:MM:SS", or a bare number. Returns std::nullopt on empty
+// or unparseable input. Never throws.
+std::optional<double> offset_to_seconds(const std::string& offset);
 
 // extract_extras returns the subset of `obj` whose keys are NOT in `known`.
 std::map<std::string, nlohmann::json> extract_extras(

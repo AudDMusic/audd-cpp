@@ -128,7 +128,9 @@ void apply_enterprise_opts(internal::FormFields& f, const EnterpriseOptions& opt
     if (opts.limit)                    f.data["limit"]  = std::to_string(*opts.limit);
     if (opts.skip_first_seconds)       f.data["skip_first_seconds"] = std::to_string(*opts.skip_first_seconds);
     if (opts.use_timecode)             f.data["use_timecode"]    = (*opts.use_timecode    ? "true" : "false");
-    if (opts.accurate_offsets)         f.data["accurate_offsets"] = (*opts.accurate_offsets ? "true" : "false");
+    // accurate_offsets defaults on: precise start_seconds/end_seconds anchoring
+    // is the SDK default unless the caller explicitly opts out.
+    f.data["accurate_offsets"] = opts.accurate_offsets.value_or(true) ? "true" : "false";
 }
 
 // Retry helper now lives in internal/retry.hpp so tests can verify the
@@ -355,7 +357,17 @@ AudD::recognize_enterprise(const Source& source, const EnterpriseOptions& opts) 
     }
     for (const auto& chunk : *result_it) {
         auto parsed = internal::parse_enterprise_chunk(chunk);
-        for (auto& song : parsed.songs) out.push_back(std::move(song));
+        // The chunk offset anchors the fragment within the user's file. Each
+        // match's start_offset / end_offset are milliseconds within the
+        // fragment; add the file anchor to get absolute file seconds.
+        auto base = internal::offset_to_seconds(parsed.offset);
+        for (auto& song : parsed.songs) {
+            if (base) {
+                song.start_seconds = *base + song.start_offset / 1000.0;
+                song.end_seconds   = *base + song.end_offset / 1000.0;
+            }
+            out.push_back(std::move(song));
+        }
     }
     return out;
 }

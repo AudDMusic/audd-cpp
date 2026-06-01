@@ -40,7 +40,7 @@ Identify a song from a local file path:
 auto result = client.recognize(audd::SourceFilePath{"/path/to/clip.mp3"});
 ```
 
-`recognize()` accepts a `std::string` (auto-classified as URL or file path), an explicit `audd::SourceUrl` / `audd::SourceFilePath`, or an `audd::SourceBytes` carrying raw audio bytes. For longer audio files, use `recognize_enterprise(source, opts)`, which returns `std::vector<EnterpriseMatch>` across the file's chunks. Each match carries the same core tags plus `score`, `start_offset`, `end_offset`, `isrc`, `upc`. Access to `isrc`, `upc`, and `score` requires a Startup plan or higher — [contact us](mailto:api@audd.io) for enterprise features.
+`recognize()` accepts a `std::string` (auto-classified as URL or file path), an explicit `audd::SourceUrl` / `audd::SourceFilePath`, or an `audd::SourceBytes` carrying raw audio bytes. For longer audio files, use `recognize_enterprise(source, opts)`, which returns `std::vector<EnterpriseMatch>` across the file's chunks. Each match carries the same core tags plus `score`, `isrc`, `upc`, and `start_seconds` / `end_seconds` — where the match plays in your file, in seconds. These are precise because the SDK requests accurate offsets by default; pass `opts.accurate_offsets = false` to turn that off. Behind them, `start_offset` / `end_offset` are the raw fragment-relative milliseconds. Access to `isrc`, `upc`, and `score` requires a Startup plan or higher — [contact us](mailto:api@audd.io) for enterprise features.
 
 Every blocking method has an `_async` twin returning `std::future`: `recognize_async`, `recognize_enterprise_async`, `streams().add_async`, etc. Reach for the future-based form when you want non-blocking dispatch from a UI thread or want to fan out concurrent calls.
 
