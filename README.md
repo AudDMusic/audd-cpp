@@ -1,5 +1,6 @@
 # audd-cpp
 
+[![Powered by AudD](https://img.shields.io/badge/Music_Recognition-AudD_API-2a4eef)](https://audd.io)
 [![CI](https://github.com/AudDMusic/audd-cpp/actions/workflows/ci.yml/badge.svg)](https://github.com/AudDMusic/audd-cpp/actions/workflows/ci.yml)
 
 Official C++ SDK for [music recognition API](https://audd.io): identify music from a short audio clip, a long audio file, or a live stream.
