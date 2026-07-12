@@ -6,6 +6,7 @@
 #include <atomic>
 #include <cstring>
 #include <iomanip>
+#include <memory>
 #include <sstream>
 #include <stdexcept>
 
@@ -20,6 +21,21 @@ namespace {
 
 std::atomic<bool> g_initialized{false};
 std::mutex g_init_mutex;
+
+// RAII wrappers over libcurl's C handles, so every code path — success,
+// early return, or thrown exception — releases each resource exactly once.
+struct CurlEasyDeleter {
+    void operator()(CURL* c) const noexcept { if (c) curl_easy_cleanup(c); }
+};
+struct CurlMimeDeleter {
+    void operator()(curl_mime* m) const noexcept { if (m) curl_mime_free(m); }
+};
+struct CurlSlistDeleter {
+    void operator()(struct curl_slist* s) const noexcept { if (s) curl_slist_free_all(s); }
+};
+using CurlEasyPtr  = std::unique_ptr<CURL, CurlEasyDeleter>;
+using CurlMimePtr  = std::unique_ptr<curl_mime, CurlMimeDeleter>;
+using CurlSlistPtr = std::unique_ptr<struct curl_slist, CurlSlistDeleter>;
 
 // curl write callback — appends data into the std::string passed via userp.
 std::size_t write_to_string(char* ptr, std::size_t size, std::size_t nmemb, void* userp) {
@@ -113,92 +129,77 @@ HttpResponse HttpClient::post_form(const std::string& url, FormFields fields) {
         }
     }
 
-    CURL* curl = curl_easy_init();
+    CurlEasyPtr curl(curl_easy_init());
     if (!curl) throw AudDConnectionError("curl_easy_init failed");
 
     HttpResponse resp;
     std::string body;
     std::string request_id;
-    curl_mime* mime = nullptr;
+    CurlMimePtr mime;
     std::string urlencoded;
-    struct curl_slist* headers = nullptr;
+    CurlSlistPtr headers;
     std::string ua = user_agent();
 
-    try {
-        curl_easy_setopt(curl, CURLOPT_URL, url.c_str());
-        curl_easy_setopt(curl, CURLOPT_USERAGENT, ua.c_str());
-        curl_easy_setopt(curl, CURLOPT_FOLLOWLOCATION, 1L);
-        curl_easy_setopt(curl, CURLOPT_NOSIGNAL, 1L);
-        curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, write_to_string);
-        curl_easy_setopt(curl, CURLOPT_WRITEDATA, &body);
-        curl_easy_setopt(curl, CURLOPT_HEADERFUNCTION, capture_request_id);
-        curl_easy_setopt(curl, CURLOPT_HEADERDATA, &request_id);
+    curl_easy_setopt(curl.get(), CURLOPT_URL, url.c_str());
+    curl_easy_setopt(curl.get(), CURLOPT_USERAGENT, ua.c_str());
+    curl_easy_setopt(curl.get(), CURLOPT_FOLLOWLOCATION, 1L);
+    curl_easy_setopt(curl.get(), CURLOPT_NOSIGNAL, 1L);
+    curl_easy_setopt(curl.get(), CURLOPT_WRITEFUNCTION, write_to_string);
+    curl_easy_setopt(curl.get(), CURLOPT_WRITEDATA, &body);
+    curl_easy_setopt(curl.get(), CURLOPT_HEADERFUNCTION, capture_request_id);
+    curl_easy_setopt(curl.get(), CURLOPT_HEADERDATA, &request_id);
 
-        long timeout_ms = static_cast<long>(timeout_.count());
-        if (timeout_ms <= 0) timeout_ms = 90 * 1000;
-        curl_easy_setopt(curl, CURLOPT_TIMEOUT_MS, timeout_ms);
-        curl_easy_setopt(curl, CURLOPT_CONNECTTIMEOUT_MS, 30L * 1000L);
+    long timeout_ms = static_cast<long>(timeout_.count());
+    if (timeout_ms <= 0) timeout_ms = 90 * 1000;
+    curl_easy_setopt(curl.get(), CURLOPT_TIMEOUT_MS, timeout_ms);
+    curl_easy_setopt(curl.get(), CURLOPT_CONNECTTIMEOUT_MS, 30L * 1000L);
 
-        if (fields.file.has_value()) {
-            // multipart upload
-            mime = curl_mime_init(curl);
-            for (const auto& kv : fields.data) {
-                curl_mimepart* part = curl_mime_addpart(mime);
-                curl_mime_name(part, kv.first.c_str());
-                curl_mime_data(part, kv.second.c_str(), CURL_ZERO_TERMINATED);
+    if (fields.file.has_value()) {
+        // multipart upload
+        mime.reset(curl_mime_init(curl.get()));
+        for (const auto& kv : fields.data) {
+            curl_mimepart* part = curl_mime_addpart(mime.get());
+            curl_mime_name(part, kv.first.c_str());
+            curl_mime_data(part, kv.second.c_str(), CURL_ZERO_TERMINATED);
+        }
+        curl_mimepart* filepart = curl_mime_addpart(mime.get());
+        curl_mime_name(filepart, "file");
+        curl_mime_filename(filepart, fields.file->name.c_str());
+        if (!fields.file->content_type.empty()) {
+            curl_mime_type(filepart, fields.file->content_type.c_str());
+        }
+        if (fields.file->is_path()) {
+            if (curl_mime_filedata(filepart, fields.file->path.c_str()) != CURLE_OK) {
+                throw AudDConnectionError("failed to attach file: " + fields.file->path);
             }
-            curl_mimepart* filepart = curl_mime_addpart(mime);
-            curl_mime_name(filepart, "file");
-            curl_mime_filename(filepart, fields.file->name.c_str());
-            if (!fields.file->content_type.empty()) {
-                curl_mime_type(filepart, fields.file->content_type.c_str());
-            }
-            if (fields.file->is_path()) {
-                if (curl_mime_filedata(filepart, fields.file->path.c_str()) != CURLE_OK) {
-                    throw AudDConnectionError("failed to attach file: " + fields.file->path);
-                }
-            } else {
-                curl_mime_data(filepart,
-                               reinterpret_cast<const char*>(fields.file->bytes.data()),
-                               fields.file->bytes.size());
-            }
-            curl_easy_setopt(curl, CURLOPT_MIMEPOST, mime);
         } else {
-            urlencoded = build_query(curl, fields.data);
-            curl_easy_setopt(curl, CURLOPT_POSTFIELDS, urlencoded.c_str());
-            curl_easy_setopt(curl, CURLOPT_POSTFIELDSIZE, static_cast<long>(urlencoded.size()));
-            headers = curl_slist_append(headers, "Content-Type: application/x-www-form-urlencoded");
-            curl_easy_setopt(curl, CURLOPT_HTTPHEADER, headers);
+            curl_mime_data(filepart,
+                           reinterpret_cast<const char*>(fields.file->bytes.data()),
+                           fields.file->bytes.size());
         }
+        curl_easy_setopt(curl.get(), CURLOPT_MIMEPOST, mime.get());
+    } else {
+        urlencoded = build_query(curl.get(), fields.data);
+        curl_easy_setopt(curl.get(), CURLOPT_POSTFIELDS, urlencoded.c_str());
+        curl_easy_setopt(curl.get(), CURLOPT_POSTFIELDSIZE, static_cast<long>(urlencoded.size()));
+        headers.reset(curl_slist_append(nullptr, "Content-Type: application/x-www-form-urlencoded"));
+        curl_easy_setopt(curl.get(), CURLOPT_HTTPHEADER, headers.get());
+    }
 
-        CURLcode rc = curl_easy_perform(curl);
-        if (rc != CURLE_OK) {
-            std::string msg = curl_easy_strerror(rc);
-            if (mime) curl_mime_free(mime);
-            if (headers) curl_slist_free_all(headers);
-            curl_easy_cleanup(curl);
-            throw AudDConnectionError(msg);
-        }
+    CURLcode rc = curl_easy_perform(curl.get());
+    if (rc != CURLE_OK) {
+        throw AudDConnectionError(curl_easy_strerror(rc));
+    }
 
-        long status = 0;
-        curl_easy_getinfo(curl, CURLINFO_RESPONSE_CODE, &status);
-        resp.http_status = static_cast<int>(status);
-        resp.raw_body = std::move(body);
-        resp.request_id = std::move(request_id);
-        try {
-            resp.json_body = nlohmann::json::parse(resp.raw_body);
-        } catch (const std::exception&) {
-            // leave json_body as null
-        }
-
-        if (mime) curl_mime_free(mime);
-        if (headers) curl_slist_free_all(headers);
-        curl_easy_cleanup(curl);
-    } catch (...) {
-        if (mime) curl_mime_free(mime);
-        if (headers) curl_slist_free_all(headers);
-        curl_easy_cleanup(curl);
-        throw;
+    long status = 0;
+    curl_easy_getinfo(curl.get(), CURLINFO_RESPONSE_CODE, &status);
+    resp.http_status = static_cast<int>(status);
+    resp.raw_body = std::move(body);
+    resp.request_id = std::move(request_id);
+    try {
+        resp.json_body = nlohmann::json::parse(resp.raw_body);
+    } catch (const std::exception&) {
+        // leave json_body as null
     }
 
     return resp;
@@ -214,7 +215,7 @@ HttpResponse HttpClient::get(const std::string& url,
         }
     }
 
-    CURL* curl = curl_easy_init();
+    CurlEasyPtr curl(curl_easy_init());
     if (!curl) throw AudDConnectionError("curl_easy_init failed");
 
     HttpResponse resp;
@@ -223,46 +224,38 @@ HttpResponse HttpClient::get(const std::string& url,
     std::string ua = user_agent();
 
     std::string full_url = url;
-    std::string q = build_query(curl, with_token);
+    std::string q = build_query(curl.get(), with_token);
     if (!q.empty()) {
         full_url += (full_url.find('?') == std::string::npos ? '?' : '&');
         full_url += q;
     }
 
-    try {
-        curl_easy_setopt(curl, CURLOPT_URL, full_url.c_str());
-        curl_easy_setopt(curl, CURLOPT_USERAGENT, ua.c_str());
-        curl_easy_setopt(curl, CURLOPT_FOLLOWLOCATION, 1L);
-        curl_easy_setopt(curl, CURLOPT_NOSIGNAL, 1L);
-        curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, write_to_string);
-        curl_easy_setopt(curl, CURLOPT_WRITEDATA, &body);
-        curl_easy_setopt(curl, CURLOPT_HEADERFUNCTION, capture_request_id);
-        curl_easy_setopt(curl, CURLOPT_HEADERDATA, &request_id);
-        long timeout_ms = static_cast<long>(timeout_.count());
-        if (timeout_ms <= 0) timeout_ms = 90 * 1000;
-        curl_easy_setopt(curl, CURLOPT_TIMEOUT_MS, timeout_ms);
-        curl_easy_setopt(curl, CURLOPT_CONNECTTIMEOUT_MS, 30L * 1000L);
+    curl_easy_setopt(curl.get(), CURLOPT_URL, full_url.c_str());
+    curl_easy_setopt(curl.get(), CURLOPT_USERAGENT, ua.c_str());
+    curl_easy_setopt(curl.get(), CURLOPT_FOLLOWLOCATION, 1L);
+    curl_easy_setopt(curl.get(), CURLOPT_NOSIGNAL, 1L);
+    curl_easy_setopt(curl.get(), CURLOPT_WRITEFUNCTION, write_to_string);
+    curl_easy_setopt(curl.get(), CURLOPT_WRITEDATA, &body);
+    curl_easy_setopt(curl.get(), CURLOPT_HEADERFUNCTION, capture_request_id);
+    curl_easy_setopt(curl.get(), CURLOPT_HEADERDATA, &request_id);
+    long timeout_ms = static_cast<long>(timeout_.count());
+    if (timeout_ms <= 0) timeout_ms = 90 * 1000;
+    curl_easy_setopt(curl.get(), CURLOPT_TIMEOUT_MS, timeout_ms);
+    curl_easy_setopt(curl.get(), CURLOPT_CONNECTTIMEOUT_MS, 30L * 1000L);
 
-        CURLcode rc = curl_easy_perform(curl);
-        if (rc != CURLE_OK) {
-            std::string msg = curl_easy_strerror(rc);
-            curl_easy_cleanup(curl);
-            throw AudDConnectionError(msg);
-        }
-        long status = 0;
-        curl_easy_getinfo(curl, CURLINFO_RESPONSE_CODE, &status);
-        resp.http_status = static_cast<int>(status);
-        resp.raw_body = std::move(body);
-        resp.request_id = std::move(request_id);
-        try {
-            resp.json_body = nlohmann::json::parse(resp.raw_body);
-        } catch (const std::exception&) {
-            // leave null
-        }
-        curl_easy_cleanup(curl);
-    } catch (...) {
-        curl_easy_cleanup(curl);
-        throw;
+    CURLcode rc = curl_easy_perform(curl.get());
+    if (rc != CURLE_OK) {
+        throw AudDConnectionError(curl_easy_strerror(rc));
+    }
+    long status = 0;
+    curl_easy_getinfo(curl.get(), CURLINFO_RESPONSE_CODE, &status);
+    resp.http_status = static_cast<int>(status);
+    resp.raw_body = std::move(body);
+    resp.request_id = std::move(request_id);
+    try {
+        resp.json_body = nlohmann::json::parse(resp.raw_body);
+    } catch (const std::exception&) {
+        // leave null
     }
     return resp;
 }

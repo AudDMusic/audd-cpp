@@ -20,13 +20,10 @@ constexpr const char* kApiBase = "https://api.audd.io";
 
 std::vector<LyricsResult> AdvancedClient::find_lyrics(const std::string& query) {
     auto body = raw_request("findLyrics", {{"q", query}});
-    auto it = body.find("result");
     std::vector<LyricsResult> out;
-    if (it == body.end() || it->is_null()) return out;
-    if (!it->is_array()) {
-        throw AudDSerializationError("findLyrics result is not an array", it->dump());
-    }
-    for (const auto& e : *it) out.push_back(internal::parse_lyrics(e));
+    const auto* result_arr = internal::result_array_or_null(body);
+    if (!result_arr) return out;
+    for (const auto& e : *result_arr) out.push_back(internal::parse_lyrics(e));
     return out;
 }
 

@@ -10,7 +10,7 @@
 int main(int argc, char** argv) {
     const std::string source = (argc > 1) ? argv[1] : "https://audd.tech/example.mp3";
 
-    audd::AudD client("test");
+    audd::AudD client("your-api-token"); // Get your API token at dashboard.audd.io
     try {
         auto result = client.recognize(source);
         if (!result) {

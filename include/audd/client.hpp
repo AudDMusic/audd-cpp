@@ -98,6 +98,10 @@ public:
     std::optional<RecognitionResult>
     recognize(const Source& source, const RecognizeOptions& opts = {});
 
+    // The `_async` methods run on a background thread that borrows this
+    // client. Keep the AudD object alive until every future they return has
+    // completed (via .get() / .wait()); destroying the client with futures
+    // still pending is undefined behavior.
     std::future<std::optional<RecognitionResult>>
     recognize_async(Source source, RecognizeOptions opts = {});
 

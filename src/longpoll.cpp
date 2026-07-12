@@ -3,7 +3,9 @@
 
 #include <audd/longpoll.hpp>
 
+#include <algorithm>
 #include <atomic>
+#include <chrono>
 #include <condition_variable>
 #include <mutex>
 #include <queue>
@@ -16,6 +18,7 @@
 
 #include "internal/client_internal.hpp"
 #include "internal/http_client.hpp"
+#include "internal/json_parse.hpp"
 #include "internal/md5.hpp"
 
 namespace audd {
@@ -156,11 +159,14 @@ void LongpollPoll::close() noexcept {
 
 namespace {
 
-bool is_keepalive(const nlohmann::json& body) {
-    if (!body.is_object()) return false;
-    if (body.contains("result")) return false;
-    if (body.contains("notification")) return false;
-    return body.contains("timeout");
+// Reads a `timestamp` field (if present and integral) to advance the poll
+// cursor. Never throws.
+void advance_since(const nlohmann::json& body, long long& cur_since) {
+    if (!body.is_object()) return;
+    auto t_it = body.find("timestamp");
+    if (t_it != body.end() && !t_it->is_null()) {
+        try { cur_since = t_it->get<long long>(); } catch (...) {}
+    }
 }
 
 } // anonymous
@@ -170,13 +176,36 @@ LongpollPoll start_longpoll_(AudD* parent, std::string category, LongpollOptions
     auto impl = std::make_unique<LongpollPoll::Impl>();
     auto* impl_ptr = impl.get();
     if (opts.timeout_seconds <= 0) opts.timeout_seconds = 50;
-    int since_time = opts.since_time;
+    long long since_time = opts.since_time;
     int timeout = opts.timeout_seconds;
 
     impl_ptr->worker = std::thread([parent, category = std::move(category),
                                     since_time, timeout, impl_ptr]() mutable {
         std::string url = std::string(kApiBase) + "/longpoll/";
-        int cur_since = since_time;
+        long long cur_since = since_time;
+
+        // Bounded exponential-ish backoff for transient connection errors.
+        // A long-lived poll expects occasional connection blips; reconnect
+        // rather than terminating the subscription.
+        constexpr std::chrono::milliseconds kBackoffBase{500};
+        constexpr std::chrono::milliseconds kBackoffCap{30000};
+        std::chrono::milliseconds backoff = kBackoffBase;
+
+        // Sleeps for `d`, but wakes early if the poll is closed. Returns
+        // false if the poll was closed while sleeping.
+        auto sleep_or_stop = [impl_ptr](std::chrono::milliseconds d) -> bool {
+            const auto deadline = std::chrono::steady_clock::now() + d;
+            while (std::chrono::steady_clock::now() < deadline) {
+                if (impl_ptr->closed.load()) return false;
+                auto remaining = deadline - std::chrono::steady_clock::now();
+                std::this_thread::sleep_for(
+                    std::min<std::chrono::milliseconds>(
+                        std::chrono::milliseconds(100),
+                        std::chrono::duration_cast<std::chrono::milliseconds>(remaining)));
+            }
+            return !impl_ptr->closed.load();
+        };
+
         try {
             while (!impl_ptr->closed.load()) {
                 std::map<std::string, std::string> params;
@@ -188,13 +217,22 @@ LongpollPoll start_longpoll_(AudD* parent, std::string category, LongpollOptions
                 try {
                     resp = parent->internal()->standard_http->get(url, params);
                 } catch (const AudDConnectionError&) {
-                    impl_ptr->errors.push(std::current_exception());
-                    impl_ptr->close_all();
-                    return;
+                    // Transient blip: back off and reconnect. Only a
+                    // user-initiated stop (checked in sleep_or_stop) ends
+                    // the loop here.
+                    if (!sleep_or_stop(backoff)) return;
+                    backoff = std::min(backoff * 2, kBackoffCap);
+                    continue;
                 }
                 if (impl_ptr->closed.load()) return;
 
-                if (resp.http_status >= 400) {
+                // A successful round-trip resets the backoff.
+                backoff = kBackoffBase;
+
+                auto disp = internal::classify_longpoll_response(
+                    resp.http_status, resp.json_body, resp.raw_body.empty());
+
+                if (disp == internal::LongpollDisposition::Terminal) {
                     AudDApiError e(0, "Longpoll endpoint returned HTTP " +
                                        std::to_string(resp.http_status),
                                    resp.http_status, resp.request_id);
@@ -203,19 +241,17 @@ LongpollPoll start_longpoll_(AudD* parent, std::string category, LongpollOptions
                     impl_ptr->close_all();
                     return;
                 }
-                if (resp.raw_body.empty()) {
-                    AudDSerializationError e("Longpoll response was empty");
-                    impl_ptr->errors.push(std::make_exception_ptr(e));
-                    impl_ptr->close_all();
-                    return;
-                }
-                if (is_keepalive(resp.json_body)) {
-                    auto t_it = resp.json_body.find("timestamp");
-                    if (t_it != resp.json_body.end() && !t_it->is_null()) {
-                        try { cur_since = t_it->get<int>(); } catch (...) {}
-                    }
+                if (disp == internal::LongpollDisposition::Skip) {
+                    // An empty body is not a terminal API error; keep polling.
                     continue;
                 }
+                if (disp == internal::LongpollDisposition::KeepAlive) {
+                    advance_since(resp.json_body, cur_since);
+                    continue;
+                }
+                // disp == Event: try to parse the body. An unparseable or
+                // unknown event body is non-terminal — skip it and keep the
+                // subscription alive.
                 try {
                     auto ev = parse_callback(resp.raw_body);
                     if (auto* m = std::get_if<StreamCallbackMatch>(&ev)) {
@@ -224,16 +260,9 @@ LongpollPoll start_longpoll_(AudD* parent, std::string category, LongpollOptions
                         impl_ptr->notifications.push(std::move(*n));
                     }
                 } catch (const std::exception&) {
-                    impl_ptr->errors.push(std::current_exception());
-                    impl_ptr->close_all();
-                    return;
+                    continue;
                 }
-                if (resp.json_body.is_object()) {
-                    auto t_it = resp.json_body.find("timestamp");
-                    if (t_it != resp.json_body.end() && !t_it->is_null()) {
-                        try { cur_since = t_it->get<int>(); } catch (...) {}
-                    }
-                }
+                advance_since(resp.json_body, cur_since);
             }
         } catch (...) {
             impl_ptr->errors.push(std::current_exception());

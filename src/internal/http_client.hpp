@@ -29,10 +29,9 @@ struct FileField {
     bool is_path() const noexcept { return !path.empty(); }
 };
 
-// FormFields aggregates a multipart POST request: data fields + at most one
-// file field. If `file` is nullopt and `data` has only a `url` key, the
-// request is sent as application/x-www-form-urlencoded; otherwise as
-// multipart/form-data.
+// FormFields aggregates a POST request: data fields + at most one file field.
+// When `file` is set the request is sent as multipart/form-data; otherwise it
+// is sent as application/x-www-form-urlencoded.
 struct FormFields {
     std::map<std::string, std::string> data;
     std::optional<FileField>           file;
@@ -47,8 +46,9 @@ struct HttpResponse {
 };
 
 // HttpClient is a thin wrapper around libcurl, hiding the C handle and
-// exposing form/multipart POST + GET. Reused across requests via a
-// mutex-guarded easy-handle pool.
+// exposing form/multipart POST + GET. Each request uses its own libcurl easy
+// handle; the api_token is guarded by a mutex so it can be rotated safely
+// while requests are in flight.
 class HttpClient {
 public:
     HttpClient(std::string api_token, std::chrono::milliseconds timeout);

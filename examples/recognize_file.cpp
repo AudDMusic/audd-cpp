@@ -13,7 +13,7 @@ int main(int argc, char** argv) {
         std::cerr << "usage: " << argv[0] << " <audio-file>\n";
         return 2;
     }
-    audd::AudD client("test");
+    audd::AudD client("your-api-token"); // Get your API token at dashboard.audd.io
     try {
         auto result = client.recognize(audd::SourceFilePath{argv[1]});
         if (!result) {

@@ -43,7 +43,7 @@ auto result = client.recognize(audd::SourceFilePath{"/path/to/clip.mp3"});
 
 `recognize()` accepts a `std::string` (auto-classified as URL or file path), an explicit `audd::SourceUrl` / `audd::SourceFilePath`, or an `audd::SourceBytes` carrying raw audio bytes. For longer audio files, use `recognize_enterprise(source, opts)`, which returns `std::vector<EnterpriseMatch>` across the file's chunks. Each match carries the same core tags plus `score`, `isrc`, `upc`, and `start_seconds` / `end_seconds` — where the match plays in your file, in seconds. These are precise because the SDK requests accurate offsets by default; pass `opts.accurate_offsets = false` to turn that off. Behind them, `start_offset` / `end_offset` are the raw fragment-relative milliseconds. Access to `isrc`, `upc`, and `score` requires a Startup plan or higher — [contact us](mailto:api@audd.io) for enterprise features.
 
-Every blocking method has an `_async` twin returning `std::future`: `recognize_async`, `recognize_enterprise_async`, `streams().add_async`, etc. Reach for the future-based form when you want non-blocking dispatch from a UI thread or want to fan out concurrent calls.
+Every blocking method has an `_async` twin returning `std::future`: `recognize_async`, `recognize_enterprise_async`, `streams().add_async`, etc. Reach for the future-based form when you want non-blocking dispatch from a UI thread or want to fan out concurrent calls. Keep the `AudD` client alive until every future has completed — the async work borrows the client. The same applies to `streams().longpoll(...)`: keep the client alive until the poll is stopped.
 
 Requires a C++17 compiler and libcurl. The library is single-target (`audd::audd`); link it and `#include <audd/audd.hpp>`.
 
@@ -62,7 +62,7 @@ Or leave it empty and the SDK reads the `AUDD_API_TOKEN` environment variable:
 audd::AudD client("");
 ```
 
-Get a real token at [dashboard.audd.io](https://dashboard.audd.io). The public `"test"` token works for a quick try without signing up, capped at 10 requests.
+Get a real token at [dashboard.audd.io](https://dashboard.audd.io). The public `"test"` token works for a quick try without signing up, capped at 10 requests/day.
 
 For long-running services that pull tokens from a secret manager and need to swap them without restarting:
 
@@ -134,7 +134,7 @@ For sending arbitrary form fields the typed parameters don't cover, set the `ext
 audd::RecognizeOptions opts;
 opts.return_metadata = {"apple_music"};
 opts.extra_parameters = {{"my_custom_flag", "1"}};
-auto result = audd.recognize(source, opts);
+auto result = client.recognize(source, opts);
 ```
 
 Typed parameters win on collision.
@@ -340,3 +340,5 @@ This SDK vendors three single-header libraries to keep build setup minimal:
 - `vendor/doctest/doctest.h` — [doctest/doctest](https://github.com/doctest/doctest), MIT (used by tests)
 
 libcurl is the one external dependency (used outbound). Ubuntu: `apt install libcurl4-openssl-dev`. macOS: `brew install curl`.
+
+The public headers `#include <nlohmann/json.hpp>`, so a consumer needs it on the include path. `install` does **not** ship the bundled copy by default, to avoid clobbering a system- or user-installed nlohmann/json in the global include directory — provide your own. To install the bundled copy instead, configure with `-DAUDD_INSTALL_VENDORED_JSON=ON`; it is placed under `include/audd/third_party` and wired into the exported target's include path.

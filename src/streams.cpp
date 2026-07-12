@@ -30,10 +30,9 @@ constexpr const char* kPreflightHint =
 std::string add_return_to_url(const std::string& raw_url,
                               const std::vector<std::string>& return_metadata) {
     if (return_metadata.empty()) return raw_url;
-    if (raw_url.find("return=") != std::string::npos) {
-        // crude but correct enough: server reserved keys live near the
-        // top of audd-go's check; we'll surface a typed error rather than
-        // silently overwriting.
+    if (internal::url_query_has_key(raw_url, "return")) {
+        // Surface a typed error rather than silently overwriting an
+        // existing `return` parameter.
         AudDApiError e(0,
             "callback URL already contains a `return` query parameter; pass "
             "an empty return_metadata or remove the parameter from the URL",
@@ -118,13 +117,10 @@ std::future<void> StreamsClient::del_async(int radio_id) {
 
 std::vector<Stream> StreamsClient::list() {
     auto body = parent_->internal()->post_form(std::string(kApiBase) + "/getStreams/", {});
-    auto it = body.find("result");
     std::vector<Stream> out;
-    if (it == body.end() || it->is_null()) return out;
-    if (!it->is_array()) {
-        throw AudDSerializationError("getStreams result is not an array", it->dump());
-    }
-    for (const auto& s : *it) out.push_back(internal::parse_stream(s));
+    const auto* result_arr = internal::result_array_or_null(body);
+    if (!result_arr) return out;
+    for (const auto& s : *result_arr) out.push_back(internal::parse_stream(s));
     return out;
 }
 

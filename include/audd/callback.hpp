@@ -90,7 +90,7 @@ CallbackEvent parse_callback(const char* data, std::size_t length);
 // handle_callback reads a callback POST body from a string and parses it.
 // Convenience overload for callers integrating with their own HTTP server.
 //
-// For cpp-httplib server callers, see audd/httplib_handle_callback.hpp.
+// For a cpp-httplib server example, see examples/streams_callback_handler.cpp.
 inline CallbackEvent handle_callback(const std::string& body) {
     return parse_callback(body);
 }

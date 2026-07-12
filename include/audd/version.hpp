@@ -8,12 +8,18 @@
 #ifndef AUDD_VERSION_HPP
 #define AUDD_VERSION_HPP
 
-#define AUDD_VERSION "1.5.12"
+#define AUDD_CPP_VERSION "1.5.13"
+
+// Compatibility alias. Defined only if a co-resident SDK (e.g. audd-c) hasn't
+// already claimed AUDD_VERSION, so both can share a project without collision.
+#ifndef AUDD_VERSION
+#define AUDD_VERSION AUDD_CPP_VERSION
+#endif
 
 namespace audd {
 
 // version() returns the SDK version string. Reported in the User-Agent header.
-inline const char* version() noexcept { return AUDD_VERSION; }
+inline const char* version() noexcept { return AUDD_CPP_VERSION; }
 
 } // namespace audd
 

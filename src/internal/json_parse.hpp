@@ -52,6 +52,33 @@ std::map<std::string, nlohmann::json> extract_extras(
     const nlohmann::json& obj,
     const std::vector<std::string>& known);
 
+// result_array_or_null returns a pointer to `body["result"]` when it is
+// present and a JSON array, and nullptr otherwise (result absent, null, or a
+// wrong JSON type). Lets endpoints that expect a list of results degrade to
+// an empty result set instead of throwing on an unexpected `result` shape.
+const nlohmann::json* result_array_or_null(const nlohmann::json& body);
+
+// url_query_has_key returns true when `url`'s query string contains a key
+// named exactly `key` (e.g. `?key=...` or `?a=b&key=c`), matching whole keys
+// only so lookalikes like `?_key=1` do not false-positive.
+bool url_query_has_key(const std::string& url, const std::string& key);
+
+// LongpollDisposition classifies what the longpoll worker should do with a
+// single completed HTTP round-trip, before the event body is parsed:
+//   Terminal  — an explicit HTTP/API error; stop the poll.
+//   KeepAlive — a keep-alive tick (has `timeout`, no event); advance and
+//               keep polling.
+//   Event     — a candidate event body; try to parse it (an unparseable or
+//               unknown body is skipped, not terminal).
+//   Skip      — nothing usable (e.g. empty body); keep polling.
+enum class LongpollDisposition { Terminal, KeepAlive, Event, Skip };
+
+// classify_longpoll_response decides the disposition for a completed request
+// from its HTTP status and parsed JSON body. Pure; never throws.
+LongpollDisposition classify_longpoll_response(int http_status,
+                                               const nlohmann::json& body,
+                                               bool body_empty);
+
 } // namespace audd::internal
 
 #endif // AUDD_INTERNAL_JSON_PARSE_HPP

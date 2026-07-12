@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.16)
-project(audd-cpp VERSION 1.5.12 LANGUAGES CXX)
+project(audd-cpp VERSION 1.5.13 LANGUAGES CXX)
 
 # ---------- options ----------
 option(AUDD_CXX20           "Build with C++20 instead of C++17"        OFF)
@@ -8,6 +8,9 @@ option(AUDD_BUILD_STATIC    "Build the static (libaudd.a) target"      ON)
 option(AUDD_BUILD_EXAMPLES  "Build runnable examples"                  OFF)
 option(AUDD_BUILD_TESTS     "Build the doctest-based test suite"       OFF)
 option(AUDD_INSTALL         "Generate install + CMake config rules"    ON)
+option(AUDD_INSTALL_VENDORED_JSON
+       "Install the bundled nlohmann/json headers (under include/audd/third_party). \
+Leave OFF to use a system/user-provided nlohmann/json"                 OFF)
 
 if(AUDD_CXX20)
     set(CMAKE_CXX_STANDARD 20)
@@ -65,6 +68,13 @@ function(audd_apply_target tgt)
         PRIVATE
             ${CMAKE_CURRENT_SOURCE_DIR}/src
     )
+    # When the bundled nlohmann/json is installed, it lives under
+    # include/audd/third_party; add that to the install interface so a
+    # consumer's `#include <nlohmann/json.hpp>` resolves against it.
+    if(AUDD_INSTALL_VENDORED_JSON)
+        target_include_directories(${tgt}
+            PUBLIC $<INSTALL_INTERFACE:include/audd/third_party>)
+    endif()
     target_link_libraries(${tgt} PUBLIC CURL::libcurl Threads::Threads)
     target_compile_features(${tgt} PUBLIC
         $<IF:$<BOOL:${AUDD_CXX20}>,cxx_std_20,cxx_std_17>)
@@ -130,6 +140,7 @@ if(AUDD_BUILD_TESTS)
     target_link_libraries(audd_tests PRIVATE ${AUDD_DEFAULT_TARGET})
     target_include_directories(audd_tests PRIVATE
         ${AUDD_VENDOR_INCLUDE}/doctest
+        ${AUDD_VENDOR_INCLUDE}/cpp-httplib
         ${CMAKE_CURRENT_SOURCE_DIR}/src)
     add_test(NAME audd_tests COMMAND audd_tests)
 endif()
@@ -140,7 +151,13 @@ if(AUDD_INSTALL)
     include(CMakePackageConfigHelpers)
 
     install(DIRECTORY include/audd DESTINATION ${CMAKE_INSTALL_INCLUDEDIR})
-    install(DIRECTORY vendor/nlohmann DESTINATION ${CMAKE_INSTALL_INCLUDEDIR})
+    # Only install the bundled nlohmann/json when explicitly requested, and
+    # under include/audd/third_party so it never clobbers a system/user copy
+    # in the global include root.
+    if(AUDD_INSTALL_VENDORED_JSON)
+        install(DIRECTORY vendor/nlohmann
+                DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}/audd/third_party)
+    endif()
 
     set(AUDD_INSTALL_TARGETS)
     if(AUDD_BUILD_SHARED)

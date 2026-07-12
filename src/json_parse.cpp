@@ -427,4 +427,41 @@ std::string branded_message(const nlohmann::json& result) {
     throw e;
 }
 
+const nlohmann::json* result_array_or_null(const nlohmann::json& body) {
+    auto it = body.find("result");
+    if (it == body.end() || it->is_null() || !it->is_array()) return nullptr;
+    return &*it;
+}
+
+LongpollDisposition classify_longpoll_response(int http_status,
+                                               const nlohmann::json& body,
+                                               bool body_empty) {
+    if (http_status >= 400) return LongpollDisposition::Terminal;
+    if (body_empty) return LongpollDisposition::Skip;
+    // Keep-alive tick: an object carrying `timeout` and no event block.
+    if (body.is_object() && body.contains("timeout") &&
+        !body.contains("result") && !body.contains("notification")) {
+        return LongpollDisposition::KeepAlive;
+    }
+    return LongpollDisposition::Event;
+}
+
+bool url_query_has_key(const std::string& url, const std::string& key) {
+    auto q = url.find('?');
+    if (q == std::string::npos) return false;
+    const std::string query = url.substr(q + 1);
+    std::size_t pos = 0;
+    while (pos <= query.size()) {
+        std::size_t amp = query.find('&', pos);
+        std::string pair = query.substr(
+            pos, amp == std::string::npos ? std::string::npos : amp - pos);
+        std::size_t eq = pair.find('=');
+        std::string k = (eq == std::string::npos) ? pair : pair.substr(0, eq);
+        if (k == key) return true;
+        if (amp == std::string::npos) break;
+        pos = amp + 1;
+    }
+    return false;
+}
+
 } // namespace audd::internal

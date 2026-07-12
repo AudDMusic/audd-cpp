@@ -24,7 +24,7 @@ namespace audd {
 // defaults.
 struct LongpollOptions {
     // since_time is the unix timestamp to resume from. 0 means "start from now".
-    int since_time = 0;
+    long long since_time = 0;
     // timeout_seconds is the longpoll timeout in seconds (server-side default: 50).
     int timeout_seconds = 50;
     // skip_callback_check disables the preflight that detects the
@@ -51,8 +51,8 @@ std::string derive_longpoll_category(const std::string& api_token, int radio_id)
 //   1. Blocking pull: next_match() / next_notification() / next_error() return
 //      std::optional<...>; nullopt means the stream has terminated.
 //
-//   2. Future-based: try_next_match_async(), try_next_notification_async(),
-//      try_next_error_async(). Each returns a std::future<std::optional<...>>
+//   2. Future-based: next_match_async(), next_notification_async(),
+//      next_error_async(). Each returns a std::future<std::optional<...>>
 //      that resolves when a value (or terminal nullopt) is available.
 //
 //   3. Callback-driven: run(on_match, on_notification, on_error) blocks until
@@ -60,6 +60,11 @@ std::string derive_longpoll_category(const std::string& api_token, int radio_id)
 //
 // The poll runs a background thread that drives HTTP I/O. Closing the poll
 // (or letting it go out of scope) joins the thread cleanly.
+//
+// The worker borrows the AudD client that created it: keep that client alive
+// until the poll is stopped (close() returns or the LongpollPoll is
+// destroyed). Destroying the client while a poll is still active is undefined
+// behavior.
 class LongpollPoll {
 public:
     LongpollPoll();

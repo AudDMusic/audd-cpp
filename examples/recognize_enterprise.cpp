@@ -14,10 +14,10 @@ int main(int argc, char** argv) {
         return 2;
     }
 
-    audd::AudD client("test");
+    audd::AudD client("your-api-token"); // Get your API token at dashboard.audd.io
     try {
         audd::EnterpriseOptions opts;
-        opts.limit = 1; // hard rule: examples pass limit=1 during dev
+        opts.limit = 1; // cap each chunk to its single best match
         auto matches = client.recognize_enterprise(std::string{argv[1]}, opts);
         int i = 1;
         for (const auto& m : matches) {

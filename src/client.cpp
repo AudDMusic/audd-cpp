@@ -349,13 +349,10 @@ AudD::recognize_enterprise(const Source& source, const EnterpriseOptions& opts) 
     internal_->emit_event(AudDEvent::Kind::Response, "recognize_enterprise", url,
                           resp.request_id, resp.http_status, elapsed, 0);
     auto body = decode_or_throw(resp, internal_->config.on_deprecation);
-    auto result_it = body.find("result");
     std::vector<EnterpriseMatch> out;
-    if (result_it == body.end() || result_it->is_null()) return out;
-    if (!result_it->is_array()) {
-        throw AudDSerializationError("enterprise result is not an array", result_it->dump());
-    }
-    for (const auto& chunk : *result_it) {
+    const auto* result_arr = internal::result_array_or_null(body);
+    if (!result_arr) return out;
+    for (const auto& chunk : *result_arr) {
         auto parsed = internal::parse_enterprise_chunk(chunk);
         // The chunk offset anchors the fragment within the user's file. Each
         // match's start_offset / end_offset are milliseconds within the
