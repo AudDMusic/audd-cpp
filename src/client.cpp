@@ -193,18 +193,22 @@ nlohmann::json decode_or_throw(internal::HttpResponse& resp,
 // AudD::Internal helpers — declared in src/internal/client_internal.hpp.
 nlohmann::json AudD::Internal::post_form(const std::string& url,
                                          internal::FormFields fields,
-                                         bool custom_catalog_ctx) {
-    return post_form(url, std::move(fields), custom_catalog_ctx, config.max_attempts);
+                                         bool custom_catalog_ctx,
+                                         internal::RetryGate gate) {
+    return post_form(url, std::move(fields), custom_catalog_ctx,
+                     config.max_attempts, gate);
 }
 
 nlohmann::json AudD::Internal::post_form(const std::string& url,
                                          internal::FormFields fields,
                                          bool custom_catalog_ctx,
-                                         int max_attempts) {
+                                         int max_attempts,
+                                         internal::RetryGate gate) {
     auto resp = retry_on_connection_error(max_attempts, config.backoff_factor,
         [&]() -> internal::HttpResponse {
             return standard_http->post_form(url, fields);
-        });
+        },
+        gate);
     return decode_or_throw(resp, config.on_deprecation, custom_catalog_ctx);
 }
 
@@ -293,12 +297,16 @@ AudD::recognize(const Source& source, const RecognizeOptions& opts) {
                           std::chrono::milliseconds(0), 0);
     internal::HttpResponse resp;
     try {
+        // Metered upload: retry only failures that provably happened before
+        // the body was sent, so a request the server may have already billed
+        // is never re-submitted.
         resp = retry_on_connection_error(internal_->config.max_attempts, internal_->config.backoff_factor,
             [&]() -> internal::HttpResponse {
                 auto fields = reopen();
                 apply_recognize_opts(fields, opts);
                 return internal_->standard_http->post_form(url, fields);
-            });
+            },
+            internal::RetryGate::PreUploadOnly);
     } catch (const std::exception&) {
         auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(
             std::chrono::steady_clock::now() - start);
@@ -332,12 +340,14 @@ AudD::recognize_enterprise(const Source& source, const EnterpriseOptions& opts) 
                           std::chrono::milliseconds(0), 0);
     internal::HttpResponse resp;
     try {
+        // Metered upload — same pre-upload-only retry gate as recognize().
         resp = retry_on_connection_error(internal_->config.max_attempts, internal_->config.backoff_factor,
             [&]() -> internal::HttpResponse {
                 auto fields = reopen();
                 apply_enterprise_opts(fields, opts);
                 return internal_->enterprise_http->post_form(url, fields);
-            });
+            },
+            internal::RetryGate::PreUploadOnly);
     } catch (const std::exception&) {
         auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(
             std::chrono::steady_clock::now() - start);

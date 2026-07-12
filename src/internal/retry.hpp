@@ -15,8 +15,22 @@
 
 namespace audd::internal {
 
+// RetryGate selects which AudDConnectionErrors are eligible for retry.
+enum class RetryGate {
+    // Idempotent reads (streams list, callback URL reads, longpoll fetches):
+    // any transport failure is safe to retry.
+    AllConnectionErrors,
+    // Recognition and mutating POSTs: retry only failures that provably
+    // happened before the request body was sent
+    // (AudDConnectionError::failed_before_upload()). Once the body may have
+    // reached the server, the metered work may already be done — and billed —
+    // so the request is never silently re-sent.
+    PreUploadOnly,
+};
+
 // retry_on_connection_error invokes `f()` up to max_attempts times, retrying
-// only on AudDConnectionError. Linear-doubling backoff between attempts.
+// only on AudDConnectionError that passes `gate` (see RetryGate).
+// Linear-doubling backoff between attempts.
 //
 // max_attempts == 1 disables retry entirely: the first AudDConnectionError
 // is rethrown immediately. Used by metered endpoints (custom_catalog().add)
@@ -30,16 +44,20 @@ namespace audd::internal {
 template <typename F>
 auto retry_on_connection_error(int max_attempts,
                                std::chrono::milliseconds backoff,
-                               F&& f) -> decltype(f()) {
+                               F&& f,
+                               RetryGate gate = RetryGate::AllConnectionErrors)
+    -> decltype(f()) {
     if (max_attempts < 1) max_attempts = 1;
     int attempt = 0;
     std::chrono::milliseconds wait = backoff;
     for (;;) {
         try {
             return f();
-        } catch (const AudDConnectionError&) {
+        } catch (const AudDConnectionError& e) {
             attempt++;
-            if (attempt >= max_attempts) throw;
+            const bool retryable = gate == RetryGate::AllConnectionErrors ||
+                                   e.failed_before_upload();
+            if (!retryable || attempt >= max_attempts) throw;
             std::this_thread::sleep_for(wait);
             wait *= 2;
         }

@@ -79,6 +79,25 @@ private:
 // libcurl global init. Call once per process. Safe to call multiple times.
 void global_init();
 
+// failure_is_pre_upload classifies a failed transfer: returns true only when
+// the failure is known to have happened before any byte of the request body
+// was sent, so retrying cannot re-submit work the server may have already
+// performed (and billed).
+//
+//   curl_code           — the CURLcode from curl_easy_perform (as int)
+//   uploaded_body_bytes — CURLINFO_SIZE_UPLOAD_T at failure time
+//   http_status         — CURLINFO_RESPONSE_CODE at failure time
+//
+// Codes that can only occur before the transfer starts (DNS, TCP connect,
+// TLS handshake, malformed URL) are pre-upload regardless of the probes.
+// Ambiguous codes (timeouts, send/recv errors, aborted transfers) are
+// pre-upload only if zero body bytes were handed to the transport AND no
+// HTTP status line came back. Exposed (rather than kept file-local) so the
+// test suite can verify the classification table directly.
+bool failure_is_pre_upload(int curl_code,
+                           long long uploaded_body_bytes,
+                           int http_status) noexcept;
+
 } // namespace audd::internal
 
 #endif // AUDD_INTERNAL_HTTP_CLIENT_HPP

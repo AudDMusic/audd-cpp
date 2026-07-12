@@ -159,12 +159,25 @@ private:
 // timeout). Use category() == ErrorCategory::Connection to match.
 class AudDConnectionError : public AudDError {
 public:
-    explicit AudDConnectionError(std::string msg)
-        : AudDError("audd: connection error: " + msg) {}
+    explicit AudDConnectionError(std::string msg, bool failed_before_upload = false)
+        : AudDError("audd: connection error: " + msg)
+        , failed_before_upload_(failed_before_upload) {}
 
     ErrorCategory category() const noexcept override {
         return ErrorCategory::Connection;
     }
+
+    // failed_before_upload is true when the failure is known to have happened
+    // before any byte of the request body was sent (DNS resolution, TCP
+    // connect, TLS handshake, ...). Recognition and mutating POSTs are
+    // auto-retried only in that case: once the body may have reached the
+    // server, the metered work may already be done — and billed — so the SDK
+    // never silently re-sends it. false means "not provably pre-upload" and
+    // is the conservative default.
+    bool failed_before_upload() const noexcept { return failed_before_upload_; }
+
+private:
+    bool failed_before_upload_ = false;
 };
 
 // AudDSerializationError is returned for 2xx HTTP responses whose body is

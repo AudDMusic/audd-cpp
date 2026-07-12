@@ -87,14 +87,62 @@ std::string build_query(CURL* curl, const std::map<std::string, std::string>& pa
     return out;
 }
 
+// probe the easy handle after a failed curl_easy_perform and classify the
+// failure via failure_is_pre_upload (see http_client.hpp).
+bool perform_failed_before_upload(CURL* curl, CURLcode rc) noexcept {
+    long long uploaded = 0;
+#if LIBCURL_VERSION_NUM >= 0x073700 // 7.55.0: CURLINFO_SIZE_UPLOAD_T
+    curl_off_t uploaded_t = 0;
+    if (curl_easy_getinfo(curl, CURLINFO_SIZE_UPLOAD_T, &uploaded_t) == CURLE_OK) {
+        uploaded = static_cast<long long>(uploaded_t);
+    }
+#else
+    double uploaded_d = 0.0;
+    if (curl_easy_getinfo(curl, CURLINFO_SIZE_UPLOAD, &uploaded_d) == CURLE_OK) {
+        uploaded = static_cast<long long>(uploaded_d);
+    }
+#endif
+    long status = 0;
+    curl_easy_getinfo(curl, CURLINFO_RESPONSE_CODE, &status);
+    return failure_is_pre_upload(static_cast<int>(rc), uploaded,
+                                 static_cast<int>(status));
+}
+
 } // anonymous
+
+bool failure_is_pre_upload(int curl_code,
+                           long long uploaded_body_bytes,
+                           int http_status) noexcept {
+    switch (static_cast<CURLcode>(curl_code)) {
+        // These can only occur before the transfer starts — the request body
+        // was never sent, so a retry cannot double-submit metered work.
+        case CURLE_UNSUPPORTED_PROTOCOL:
+        case CURLE_URL_MALFORMAT:
+        case CURLE_COULDNT_RESOLVE_PROXY:
+        case CURLE_COULDNT_RESOLVE_HOST:
+        case CURLE_COULDNT_CONNECT:
+        case CURLE_SSL_CONNECT_ERROR:
+        case CURLE_PEER_FAILED_VERIFICATION:
+        case CURLE_SSL_CIPHER:
+        case CURLE_SSL_CACERT_BADFILE:
+        case CURLE_INTERFACE_FAILED:
+            return true;
+        default:
+            // Ambiguous codes — CURLE_OPERATION_TIMEDOUT in particular can
+            // fire either while connecting or while waiting for the response
+            // after a completed upload. Only classify as pre-upload when the
+            // probes prove nothing was sent: zero request-body bytes handed
+            // to the transport and no HTTP status line received.
+            return uploaded_body_bytes == 0 && http_status == 0;
+    }
+}
 
 void global_init() {
     if (g_initialized.load(std::memory_order_acquire)) return;
     std::lock_guard<std::mutex> lk(g_init_mutex);
     if (g_initialized.load(std::memory_order_relaxed)) return;
     if (curl_global_init(CURL_GLOBAL_DEFAULT) != CURLE_OK) {
-        throw AudDConnectionError("curl_global_init failed");
+        throw AudDConnectionError("curl_global_init failed", /*failed_before_upload=*/true);
     }
     g_initialized.store(true, std::memory_order_release);
 }
@@ -130,7 +178,7 @@ HttpResponse HttpClient::post_form(const std::string& url, FormFields fields) {
     }
 
     CurlEasyPtr curl(curl_easy_init());
-    if (!curl) throw AudDConnectionError("curl_easy_init failed");
+    if (!curl) throw AudDConnectionError("curl_easy_init failed", /*failed_before_upload=*/true);
 
     HttpResponse resp;
     std::string body;
@@ -170,7 +218,8 @@ HttpResponse HttpClient::post_form(const std::string& url, FormFields fields) {
         }
         if (fields.file->is_path()) {
             if (curl_mime_filedata(filepart, fields.file->path.c_str()) != CURLE_OK) {
-                throw AudDConnectionError("failed to attach file: " + fields.file->path);
+                throw AudDConnectionError("failed to attach file: " + fields.file->path,
+                                          /*failed_before_upload=*/true);
             }
         } else {
             curl_mime_data(filepart,
@@ -188,7 +237,8 @@ HttpResponse HttpClient::post_form(const std::string& url, FormFields fields) {
 
     CURLcode rc = curl_easy_perform(curl.get());
     if (rc != CURLE_OK) {
-        throw AudDConnectionError(curl_easy_strerror(rc));
+        throw AudDConnectionError(curl_easy_strerror(rc),
+                                  perform_failed_before_upload(curl.get(), rc));
     }
 
     long status = 0;
@@ -216,7 +266,7 @@ HttpResponse HttpClient::get(const std::string& url,
     }
 
     CurlEasyPtr curl(curl_easy_init());
-    if (!curl) throw AudDConnectionError("curl_easy_init failed");
+    if (!curl) throw AudDConnectionError("curl_easy_init failed", /*failed_before_upload=*/true);
 
     HttpResponse resp;
     std::string body;
@@ -245,7 +295,8 @@ HttpResponse HttpClient::get(const std::string& url,
 
     CURLcode rc = curl_easy_perform(curl.get());
     if (rc != CURLE_OK) {
-        throw AudDConnectionError(curl_easy_strerror(rc));
+        throw AudDConnectionError(curl_easy_strerror(rc),
+                                  perform_failed_before_upload(curl.get(), rc));
     }
     long status = 0;
     curl_easy_getinfo(curl.get(), CURLINFO_RESPONSE_CODE, &status);

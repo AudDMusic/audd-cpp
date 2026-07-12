@@ -68,7 +68,10 @@ std::future<void> StreamsClient::set_callback_url_async(std::string url,
 }
 
 std::string StreamsClient::get_callback_url() {
-    auto body = parent_->internal()->post_form(std::string(kApiBase) + "/getCallbackUrl/", {});
+    // Idempotent read (served over POST): safe to retry any transport failure.
+    auto body = parent_->internal()->post_form(
+        std::string(kApiBase) + "/getCallbackUrl/", {},
+        /*custom_catalog_ctx=*/false, internal::RetryGate::AllConnectionErrors);
     auto it = body.find("result");
     if (it == body.end() || it->is_null()) return "";
     if (it->is_string()) return it->get<std::string>();
@@ -116,7 +119,10 @@ std::future<void> StreamsClient::del_async(int radio_id) {
 }
 
 std::vector<Stream> StreamsClient::list() {
-    auto body = parent_->internal()->post_form(std::string(kApiBase) + "/getStreams/", {});
+    // Idempotent read (served over POST): safe to retry any transport failure.
+    auto body = parent_->internal()->post_form(
+        std::string(kApiBase) + "/getStreams/", {},
+        /*custom_catalog_ctx=*/false, internal::RetryGate::AllConnectionErrors);
     std::vector<Stream> out;
     const auto* result_arr = internal::result_array_or_null(body);
     if (!result_arr) return out;
