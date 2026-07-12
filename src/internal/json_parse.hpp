@@ -4,6 +4,7 @@
 #ifndef AUDD_INTERNAL_JSON_PARSE_HPP
 #define AUDD_INTERNAL_JSON_PARSE_HPP
 
+#include <cstdint>
 #include <optional>
 #include <string>
 
@@ -13,6 +14,30 @@
 #include <audd/recognition.hpp>
 
 namespace audd::internal {
+
+// --- scalar coercion --------------------------------------------------------
+// The AudD API is loosely typed: a field that is normally an int can arrive as
+// a numeric string, a normally-string field can arrive as a number, etc. These
+// coerce a wrong-typed *scalar* JSON value to the expected type when it is
+// convertible, returning std::nullopt when it is not (object/array where a
+// scalar was expected, non-numeric string, unrecognized bool word). The field
+// readers use them to degrade to a type's default only when coercion fails;
+// well-typed values pass through unchanged. Pure; never throw.
+//
+//   coerce_string: number -> rendered string (ints without a decimal point);
+//                  bool -> "true"/"false"; object/array -> nullopt.
+//   coerce_int:    double -> truncate toward zero; numeric string -> full-
+//                  string strict parse (rejects "12abc"/nan/inf/hex);
+//                  bool -> 0/1; else nullopt.
+//   coerce_double: int -> convert; numeric string -> strict parse; else nullopt.
+//   coerce_bool:   number -> !=0; string via a strict case-insensitive trimmed
+//                  whitelist ("true"/"1"/"yes"/"on" -> true;
+//                  "false"/"0"/"no"/"off"/"" -> false; other -> nullopt);
+//                  else nullopt.
+std::optional<std::string>  coerce_string(const nlohmann::json& v);
+std::optional<std::int64_t> coerce_int(const nlohmann::json& v);
+std::optional<double>       coerce_double(const nlohmann::json& v);
+std::optional<bool>         coerce_bool(const nlohmann::json& v);
 
 // Parsing helpers — convert nlohmann::json blobs into the typed structs.
 

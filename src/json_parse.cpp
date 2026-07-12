@@ -4,6 +4,10 @@
 #include "internal/json_parse.hpp"
 
 #include <algorithm>
+#include <cctype>
+#include <charconv>
+#include <cmath>
+#include <cstdint>
 #include <optional>
 #include <set>
 #include <string>
@@ -15,36 +19,186 @@ namespace audd::internal {
 
 namespace {
 
-// j_get returns the field at `key` cast to T, or default_value on missing /
-// wrong type / null. Tolerant of the AudD API's loose JSON shapes.
-template <typename T>
-T j_get(const nlohmann::json& j, const std::string& key, T default_value) {
-    if (!j.is_object()) return default_value;
-    auto it = j.find(key);
-    if (it == j.end() || it->is_null()) return default_value;
+// --- scalar coercion --------------------------------------------------------
+//
+// The AudD API is loosely typed: a field that is normally an int can arrive as
+// a numeric string ("85"), a field that is normally a string can arrive as a
+// number (123), and so on. The readers below coerce a wrong-typed *scalar*
+// value to the expected type when it is convertible, and fall back to a caller-
+// supplied default only when it is not (non-numeric string, object/array where
+// a scalar was expected, etc.). Well-typed values take the fast path.
+//
+// Coercion policy (mirrors the wider SDK family's forward-compat model):
+//   string  <- number rendered without a trailing ".0" for integers; bool as
+//              "true"/"false"; object/array -> default.
+//   int     <- double truncated toward zero; full-string-validated numeric
+//              string; bool -> 0/1; else default.
+//   double  <- int; full-string-validated numeric string; else default.
+//   bool    <- number != 0; string via a strict case-insensitive, trimmed
+//              whitelist ("true"/"1"/"yes"/"on" -> true;
+//              "false"/"0"/"no"/"off"/"" -> false); any other string ->
+//              default; else default.
+//
+// Numeric-string parsing is full-string strict after trimming and rejects
+// non-decimal forms (nan, inf, 0x hex) so a stray "NaN" degrades to the
+// default rather than a surprise value.
+
+// trim_ascii returns `s` without leading/trailing ASCII whitespace.
+std::string trim_ascii(const std::string& s) {
+    std::size_t b = 0, e = s.size();
+    auto is_ws = [](unsigned char c) {
+        return c == ' ' || c == '\t' || c == '\n' || c == '\r' ||
+               c == '\f' || c == '\v';
+    };
+    while (b < e && is_ws(static_cast<unsigned char>(s[b]))) ++b;
+    while (e > b && is_ws(static_cast<unsigned char>(s[e - 1]))) --e;
+    return s.substr(b, e - b);
+}
+
+// parse_full_int parses `s` as a base-10 integer, requiring the entire trimmed
+// string to be consumed (no "12abc" partial parses, no hex, no nan/inf).
+// std::from_chars is locale-independent and base-10-only, so it rejects
+// "0x1A" and non-numeric junk naturally. Accepts a leading '+' (stripped
+// before from_chars, which itself accepts only '-') and surrounding
+// whitespace. Returns nullopt on failure.
+std::optional<std::int64_t> parse_full_int(const std::string& s) {
+    std::string t = trim_ascii(s);
+    if (!t.empty() && t.front() == '+') t.erase(t.begin());
+    if (t.empty()) return std::nullopt;
+    std::int64_t v = 0;
+    const char* first = t.data();
+    const char* last  = t.data() + t.size();
+    auto res = std::from_chars(first, last, v, 10);
+    if (res.ec != std::errc{} || res.ptr != last) return std::nullopt;
+    return v;
+}
+
+// parse_full_double parses `s` as a decimal double, requiring the entire
+// trimmed string to be consumed and rejecting nan/inf and hex forms. std::stod
+// accepts "nan", "inf", and "0x..." on many platforms, so guard against those
+// explicitly. Accepts a leading +/- and surrounding whitespace. Returns
+// nullopt on failure.
+std::optional<double> parse_full_double(const std::string& s) {
+    const std::string t = trim_ascii(s);
+    if (t.empty()) return std::nullopt;
+    // Reject hex ("0x1A": 'x') and alphabetic nan/inf spellings up front by
+    // rejecting any letter other than a decimal exponent 'e'/'E'; std::stod
+    // would otherwise accept them on many platforms.
+    for (char c : t) {
+        unsigned char uc = static_cast<unsigned char>(c);
+        if (std::isalpha(uc) && c != 'e' && c != 'E') return std::nullopt;
+    }
     try {
-        return it->get<T>();
+        std::size_t consumed = 0;
+        double v = std::stod(t, &consumed);
+        if (consumed != t.size()) return std::nullopt; // trailing junk
+        if (!std::isfinite(v)) return std::nullopt;     // nan/inf guard
+        return v;
     } catch (const std::exception&) {
-        return default_value;
+        return std::nullopt;
     }
 }
 
-// j_get_string is the common case: pull a string field, returning "" on
-// missing.
+// num_to_string renders a JSON number as a string: integers without a decimal
+// point ("85"), doubles naturally ("8.5").
+std::string num_to_string(const nlohmann::json& v) {
+    if (v.is_number_integer())  return std::to_string(v.get<std::int64_t>());
+    if (v.is_number_unsigned()) return std::to_string(v.get<std::uint64_t>());
+    // Double. Integer-valued doubles render without a trailing ".0" ("85.0"
+    // -> "85"); everything else uses nlohmann's shortest round-trippable form.
+    double d = v.get<double>();
+    if (std::isfinite(d) && d == std::trunc(d) &&
+        d >= -9.2233720368547758e18 && d < 9.2233720368547758e18) {
+        return std::to_string(static_cast<std::int64_t>(d));
+    }
+    return v.dump();
+}
+
+} // anonymous (parse primitives)
+
+// --- public coercion entry points -------------------------------------------
+// Exposed via json_parse.hpp so the readers below and the test suite can
+// exercise the coercion policy directly.
+
+std::optional<std::string> coerce_string(const nlohmann::json& v) {
+    if (v.is_string())  return v.get<std::string>();
+    if (v.is_boolean()) return v.get<bool>() ? std::string("true")
+                                             : std::string("false");
+    if (v.is_number())  return num_to_string(v);
+    return std::nullopt; // object / array / null
+}
+
+std::optional<std::int64_t> coerce_int(const nlohmann::json& v) {
+    if (v.is_number_integer())  return v.get<std::int64_t>();
+    if (v.is_number_unsigned()) return static_cast<std::int64_t>(v.get<std::uint64_t>());
+    if (v.is_number_float())    return static_cast<std::int64_t>(v.get<double>()); // trunc toward 0
+    if (v.is_boolean())         return v.get<bool>() ? 1 : 0;
+    if (v.is_string())          return parse_full_int(v.get<std::string>());
+    return std::nullopt; // object / array / null
+}
+
+std::optional<double> coerce_double(const nlohmann::json& v) {
+    if (v.is_number())  return v.get<double>();
+    if (v.is_boolean()) return v.get<bool>() ? 1.0 : 0.0;
+    if (v.is_string())  return parse_full_double(v.get<std::string>());
+    return std::nullopt; // object / array / null
+}
+
+std::optional<bool> coerce_bool(const nlohmann::json& v) {
+    if (v.is_boolean()) return v.get<bool>();
+    if (v.is_number())  return v.get<double>() != 0.0;
+    if (v.is_string()) {
+        std::string s = trim_ascii(v.get<std::string>());
+        std::transform(s.begin(), s.end(), s.begin(),
+                       [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+        if (s.empty() || s == "false" || s == "0" || s == "no" || s == "off")
+            return false;
+        if (s == "true" || s == "1" || s == "yes" || s == "on")
+            return true;
+        return std::nullopt; // unrecognized -> not convertible
+    }
+    return std::nullopt; // object / array / null
+}
+
+namespace {
+
+// find_value returns a pointer to the non-null value at `key`, or nullptr on a
+// non-object, a missing key, or an explicit JSON null.
+const nlohmann::json* find_value(const nlohmann::json& j, const std::string& key) {
+    if (!j.is_object()) return nullptr;
+    auto it = j.find(key);
+    if (it == j.end() || it->is_null()) return nullptr;
+    return &*it;
+}
+
+// j_str pulls a string field, coercing convertible scalars, returning "" on
+// missing / null / not-convertible.
 std::string j_str(const nlohmann::json& j, const std::string& key) {
-    return j_get<std::string>(j, key, "");
+    const nlohmann::json* v = find_value(j, key);
+    if (!v) return "";
+    if (auto s = coerce_string(*v)) return *s;
+    return "";
 }
 
 int j_int(const nlohmann::json& j, const std::string& key) {
-    return j_get<int>(j, key, 0);
+    const nlohmann::json* v = find_value(j, key);
+    if (!v) return 0;
+    if (auto n = coerce_int(*v)) return static_cast<int>(*n);
+    return 0;
 }
 
 bool j_bool(const nlohmann::json& j, const std::string& key) {
-    return j_get<bool>(j, key, false);
+    const nlohmann::json* v = find_value(j, key);
+    if (!v) return false;
+    if (auto b = coerce_bool(*v)) return *b;
+    return false;
 }
 
 std::int64_t j_int64(const nlohmann::json& j, const std::string& key) {
-    return j_get<std::int64_t>(j, key, 0);
+    const nlohmann::json* v = find_value(j, key);
+    if (!v) return 0;
+    if (auto n = coerce_int(*v)) return *n;
+    return 0;
 }
 
 } // anonymous
@@ -180,11 +334,8 @@ MusicBrainzEntry parse_musicbrainz(const nlohmann::json& j) {
 RecognitionResult parse_recognition(const nlohmann::json& j) {
     RecognitionResult r;
     r.timecode     = j_str(j, "timecode");
-    if (j.is_object()) {
-        auto it = j.find("audio_id");
-        if (it != j.end() && !it->is_null()) {
-            try { r.audio_id = it->get<int>(); } catch (...) {}
-        }
+    if (const nlohmann::json* v = find_value(j, "audio_id")) {
+        if (auto n = coerce_int(*v)) r.audio_id = static_cast<int>(*n);
     }
     r.artist       = j_str(j, "artist");
     r.title        = j_str(j, "title");
@@ -354,11 +505,8 @@ StreamCallbackNotification parse_stream_callback_notification(
     const std::string& full_body) {
     StreamCallbackNotification n;
     n.radio_id             = j_int(notification_obj, "radio_id");
-    if (notification_obj.is_object()) {
-        auto it = notification_obj.find("stream_running");
-        if (it != notification_obj.end() && !it->is_null()) {
-            try { n.stream_running = it->get<bool>(); } catch (...) {}
-        }
+    if (const nlohmann::json* v = find_value(notification_obj, "stream_running")) {
+        if (auto b = coerce_bool(*v)) n.stream_running = *b;
     }
     n.notification_code    = j_int(notification_obj, "notification_code");
     n.notification_message = j_str(notification_obj, "notification_message");
