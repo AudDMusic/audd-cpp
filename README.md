@@ -108,7 +108,7 @@ if (result->spotify)     std::cout << "Spotify URI: " << result->spotify->uri <<
 std::cout << "Preview: " << result->preview_url() << "\n"; // first across requested providers; "" if none
 ```
 
-Valid `return_metadata` values: `apple_music`, `spotify`, `deezer`, `napster`, `musicbrainz`. The metadata-block fields are `std::optional<...>`; `musicbrainz` is a `std::vector<...>`.
+Valid `return_metadata` values: `apple_music`, `spotify`, `deezer`, `musicbrainz`. The metadata-block fields are `std::optional<...>`; `musicbrainz` is a `std::vector<...>`.
 
 ### Reading additional metadata
 
