@@ -148,8 +148,8 @@ private:
             "Note: the custom-catalog endpoint is for adding songs to your "
             "private fingerprint database, not for music recognition. If you "
             "intended to identify music, use client.recognize(...) (or "
-            "client.recognize_enterprise(...) for files longer than 25 "
-            "seconds) instead.\n\n"
+            "client.recognize_enterprise(...) to scan beyond the first 12 "
+            "seconds of a file) instead.\n\n"
             "To request custom-catalog access, contact api@audd.io.\n\n"
             "[Server message: ") + server_msg + "]";
     }

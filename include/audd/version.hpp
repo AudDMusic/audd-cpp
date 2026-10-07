@@ -8,7 +8,7 @@
 #ifndef AUDD_VERSION_HPP
 #define AUDD_VERSION_HPP
 
-#define AUDD_CPP_VERSION "1.5.15"
+#define AUDD_CPP_VERSION "1.5.16"
 
 // Compatibility alias. Defined only if a co-resident SDK (e.g. audd-c) hasn't
 // already claimed AUDD_VERSION, so both can share a project without collision.
