@@ -229,6 +229,13 @@ TEST_CASE("enterprise audio_id that is not convertible stays absent") {
     CHECK(c.songs[0].is_public_match());
 }
 
+TEST_CASE("a boolean audio_id stays absent") {
+    CHECK_FALSE(parse_recognition(J(R"({"audio_id":true})")).audio_id.has_value());
+    auto c = parse_enterprise_chunk(J(R"({"songs":[{"audio_id":true,"artist":"a"}]})"));
+    REQUIRE(c.songs.size() == 1);
+    CHECK_FALSE(c.songs[0].audio_id.has_value());
+}
+
 TEST_CASE("stream_running arriving as a string coerces via whitelist") {
     auto on  = parse_stream(J(R"({"radio_id":1,"stream_running":"true"})"));
     CHECK(on.stream_running == true);

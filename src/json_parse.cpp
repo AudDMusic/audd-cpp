@@ -137,6 +137,12 @@ std::optional<std::int64_t> coerce_int(const nlohmann::json& v) {
     return std::nullopt; // object / array / null
 }
 
+// IDs never come from a bool: true/false would invent an id of 1/0.
+std::optional<std::int64_t> coerce_id(const nlohmann::json& v) {
+    if (v.is_boolean()) return std::nullopt;
+    return coerce_int(v);
+}
+
 std::optional<double> coerce_double(const nlohmann::json& v) {
     if (v.is_number())  return v.get<double>();
     if (v.is_boolean()) return v.get<bool>() ? 1.0 : 0.0;
@@ -335,7 +341,7 @@ RecognitionResult parse_recognition(const nlohmann::json& j) {
     RecognitionResult r;
     r.timecode     = j_str(j, "timecode");
     if (const nlohmann::json* v = find_value(j, "audio_id")) {
-        if (auto n = coerce_int(*v)) r.audio_id = static_cast<int>(*n);
+        if (auto n = coerce_id(*v)) r.audio_id = static_cast<int>(*n);
     }
     r.artist       = j_str(j, "artist");
     r.title        = j_str(j, "title");
@@ -381,7 +387,7 @@ EnterpriseChunkResult parse_enterprise_chunk(const nlohmann::json& j) {
                 m.score        = j_int(song, "score");
                 m.timecode     = j_str(song, "timecode");
                 if (const nlohmann::json* v = find_value(song, "audio_id")) {
-                    if (auto n = coerce_int(*v)) m.audio_id = static_cast<int>(*n);
+                    if (auto n = coerce_id(*v)) m.audio_id = static_cast<int>(*n);
                 }
                 m.artist       = j_str(song, "artist");
                 m.title        = j_str(song, "title");
