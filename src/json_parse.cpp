@@ -380,6 +380,9 @@ EnterpriseChunkResult parse_enterprise_chunk(const nlohmann::json& j) {
                 EnterpriseMatch m;
                 m.score        = j_int(song, "score");
                 m.timecode     = j_str(song, "timecode");
+                if (const nlohmann::json* v = find_value(song, "audio_id")) {
+                    if (auto n = coerce_int(*v)) m.audio_id = static_cast<int>(*n);
+                }
                 m.artist       = j_str(song, "artist");
                 m.title        = j_str(song, "title");
                 m.album        = j_str(song, "album");
@@ -391,7 +394,7 @@ EnterpriseChunkResult parse_enterprise_chunk(const nlohmann::json& j) {
                 m.start_offset = j_int(song, "start_offset");
                 m.end_offset   = j_int(song, "end_offset");
                 m.extras = extract_extras(song, {
-                    "score", "timecode", "artist", "title", "album",
+                    "score", "timecode", "audio_id", "artist", "title", "album",
                     "release_date", "label", "isrc", "upc", "song_link",
                     "start_offset", "end_offset",
                 });

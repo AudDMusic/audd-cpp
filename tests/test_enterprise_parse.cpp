@@ -186,3 +186,48 @@ TEST_CASE("enterprise match streaming_urls returns all providers") {
     CHECK(urls.size() == 5); // spotify, apple_music, deezer, napster, youtube
     CHECK(urls[audd::StreamingProvider::Spotify] == "https://lis.tn/abcd?spotify");
 }
+
+TEST_CASE("enterprise custom-catalog match carries audio_id") {
+    // Fixture: enterprise_custom_match.json
+    auto body = nlohmann::json::parse(R"({
+        "status": "success",
+        "result": [
+            {
+                "songs": [
+                    {
+                        "score": 100,
+                        "timecode": "01:45",
+                        "audio_id": 146,
+                        "start_offset": 0,
+                        "end_offset": 11960
+                    }
+                ],
+                "offset": "00:24"
+            }
+        ],
+        "execution_time": "143.512004ms"
+    })");
+    auto matches = flatten(body["result"]);
+    REQUIRE(matches.size() == 1);
+    const auto& m = matches[0];
+    REQUIRE(m.audio_id.has_value());
+    CHECK(*m.audio_id == 146);
+    CHECK(m.is_custom_match());
+    CHECK_FALSE(m.is_public_match());
+    CHECK(m.timecode == "01:45");
+    CHECK(m.artist.empty());
+    // audio_id is typed, so it is not duplicated into extras.
+    CHECK(m.extras.find("audio_id") == m.extras.end());
+}
+
+TEST_CASE("enterprise public match has no audio_id") {
+    auto j = nlohmann::json::parse(R"({
+        "offset": "00:00",
+        "songs": [{"score": 100, "artist": "A", "title": "T", "isrc": "US001", "upc": "000"}]
+    })");
+    auto c = parse_enterprise_chunk(j);
+    REQUIRE(c.songs.size() == 1);
+    CHECK_FALSE(c.songs[0].audio_id.has_value());
+    CHECK_FALSE(c.songs[0].is_custom_match());
+    CHECK(c.songs[0].is_public_match());
+}

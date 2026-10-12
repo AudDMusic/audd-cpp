@@ -186,10 +186,13 @@ struct RecognitionResult {
 };
 
 // EnterpriseMatch is one match within a chunk of the enterprise endpoint's
-// response. Multiple matches per file are common.
+// response. Multiple matches per file are common. Public-catalog matches
+// populate artist/title/etc.; custom-catalog matches populate audio_id instead.
+// Use is_public_match() / is_custom_match() to discriminate.
 struct EnterpriseMatch {
     int         score = 0;
     std::string timecode;
+    std::optional<int> audio_id;
     std::string artist;
     std::string title;
     std::string album;
@@ -209,6 +212,16 @@ struct EnterpriseMatch {
 
     std::map<std::string, nlohmann::json> extras;
     std::string                           raw_response;
+
+    // is_custom_match reports whether this is a custom-catalog match
+    // (audio_id populated).
+    bool is_custom_match() const noexcept { return audio_id.has_value(); }
+
+    // is_public_match reports whether this is a public-catalog match
+    // (artist/title set, audio_id absent).
+    bool is_public_match() const noexcept {
+        return !audio_id.has_value() && (!artist.empty() || !title.empty());
+    }
 
     // thumbnail_url returns the cover-art URL for lis.tn-hosted song_links.
     std::string thumbnail_url() const;
