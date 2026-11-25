@@ -22,6 +22,19 @@ namespace {
 std::atomic<bool> g_initialized{false};
 std::mutex g_init_mutex;
 
+// Used when a client is built with a zero or negative timeout; matches
+// ClientConfig::standard_timeout's default.
+constexpr long kDefaultTimeoutMs = 60L * 1000L;
+
+// curl progress callback: a non-zero return makes libcurl stop the transfer
+// with CURLE_ABORTED_BY_CALLBACK. libcurl calls it about once a second while
+// the request waits for the server, so a set flag stops a held request
+// promptly.
+int abort_when_flag_set(void* clientp, curl_off_t, curl_off_t, curl_off_t, curl_off_t) {
+    const auto* flag = static_cast<const std::atomic<bool>*>(clientp);
+    return (flag && flag->load()) ? 1 : 0;
+}
+
 // RAII wrappers over libcurl's C handles, so every code path — success,
 // early return, or thrown exception — releases each resource exactly once.
 struct CurlEasyDeleter {
@@ -198,7 +211,7 @@ HttpResponse HttpClient::post_form(const std::string& url, FormFields fields) {
     curl_easy_setopt(curl.get(), CURLOPT_HEADERDATA, &request_id);
 
     long timeout_ms = static_cast<long>(timeout_.count());
-    if (timeout_ms <= 0) timeout_ms = 90 * 1000;
+    if (timeout_ms <= 0) timeout_ms = kDefaultTimeoutMs;
     curl_easy_setopt(curl.get(), CURLOPT_TIMEOUT_MS, timeout_ms);
     curl_easy_setopt(curl.get(), CURLOPT_CONNECTTIMEOUT_MS, 30L * 1000L);
 
@@ -257,8 +270,14 @@ HttpResponse HttpClient::post_form(const std::string& url, FormFields fields) {
 
 HttpResponse HttpClient::get(const std::string& url,
                              const std::map<std::string, std::string>& params) {
+    return get(url, params, GetOptions{});
+}
+
+HttpResponse HttpClient::get(const std::string& url,
+                             const std::map<std::string, std::string>& params,
+                             const GetOptions& opts) {
     auto with_token = params;
-    {
+    if (opts.send_token) {
         std::lock_guard<std::mutex> lk(token_mutex_);
         if (!api_token_.empty() && with_token.find("api_token") == with_token.end()) {
             with_token["api_token"] = api_token_;
@@ -288,10 +307,16 @@ HttpResponse HttpClient::get(const std::string& url,
     curl_easy_setopt(curl.get(), CURLOPT_WRITEDATA, &body);
     curl_easy_setopt(curl.get(), CURLOPT_HEADERFUNCTION, capture_request_id);
     curl_easy_setopt(curl.get(), CURLOPT_HEADERDATA, &request_id);
-    long timeout_ms = static_cast<long>(timeout_.count());
-    if (timeout_ms <= 0) timeout_ms = 90 * 1000;
+    long timeout_ms = static_cast<long>(
+        (opts.timeout.count() > 0 ? opts.timeout : timeout_).count());
+    if (timeout_ms <= 0) timeout_ms = kDefaultTimeoutMs;
     curl_easy_setopt(curl.get(), CURLOPT_TIMEOUT_MS, timeout_ms);
     curl_easy_setopt(curl.get(), CURLOPT_CONNECTTIMEOUT_MS, 30L * 1000L);
+    if (opts.abort) {
+        curl_easy_setopt(curl.get(), CURLOPT_XFERINFOFUNCTION, abort_when_flag_set);
+        curl_easy_setopt(curl.get(), CURLOPT_XFERINFODATA, opts.abort);
+        curl_easy_setopt(curl.get(), CURLOPT_NOPROGRESS, 0L);
+    }
 
     CURLcode rc = curl_easy_perform(curl.get());
     if (rc != CURLE_OK) {

@@ -1,12 +1,13 @@
 // SPDX-License-Identifier: MIT
 // Copyright (c) 2026 AudD, LLC (https://audd.io)
 //
-// Verifies the retry invariant used by metered endpoints
-// (custom_catalog().add): with max_attempts=1, retry_on_connection_error
-// must invoke the callable exactly once regardless of whether it succeeds
-// or throws AudDConnectionError. A 5xx HTTP response must also be a
-// single attempt, because retry happens at the AudDConnectionError layer
-// — HTTP-status retry is intentionally not performed.
+// Verifies the retry invariant custom_catalog().add relies on (an upload is
+// sent once and never retried automatically): with max_attempts=1,
+// retry_on_connection_error must invoke the callable exactly once regardless
+// of whether it succeeds or throws AudDConnectionError. A 5xx HTTP response
+// must also be a single attempt, because retry happens at the
+// AudDConnectionError layer — HTTP-status retry is intentionally not
+// performed.
 
 #include <doctest.h>
 

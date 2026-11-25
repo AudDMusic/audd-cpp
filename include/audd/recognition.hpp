@@ -89,16 +89,20 @@ struct MusicBrainzEntry {
 };
 
 // StreamingProvider names the streaming services reachable via the lis.tn
-// `?<provider>` redirect helper.
+// redirect helper.
 enum class StreamingProvider {
     Spotify,
     AppleMusic,
     Deezer,
+    // Napster links don't resolve: streaming_url(Napster) is "" unless a
+    // Napster metadata block carries a direct link, and streaming_urls()
+    // leaves Napster out.
     Napster,
     YouTube,
 };
 
-// streaming_provider_name returns the canonical query-string name.
+// streaming_provider_name returns the provider's stable lowercase name
+// ("spotify", "apple_music", ...), for logs and map keys.
 inline const char* streaming_provider_name(StreamingProvider p) noexcept {
     switch (p) {
         case StreamingProvider::Spotify:    return "spotify";
@@ -166,8 +170,8 @@ struct RecognitionResult {
     //     spotify.external_urls.spotify, deezer.link, napster.href) when
     //     the user requested that provider via opts.return_metadata.
     //     Direct = no redirect, faster.
-    //  2. lis.tn redirect "<song_link>?<provider>" when song_link is on
-    //     lis.tn.
+    //  2. lis.tn redirect when song_link is on lis.tn: "<song_link>?spotify",
+    //     "?apple", "?deezer" or "?youtube". Napster has no redirect.
     //  3. "" otherwise. YouTube has no metadata-block fallback.
     std::string streaming_url(StreamingProvider provider) const;
 
@@ -227,8 +231,8 @@ struct EnterpriseMatch {
     std::string thumbnail_url() const;
 
     // streaming_url returns the lis.tn redirect URL for a streaming
-    // provider, or "" when song_link is non-lis.tn (EnterpriseMatch doesn't
-    // have full metadata blocks).
+    // provider, or "" when song_link is non-lis.tn or the provider has no
+    // redirect (Napster).
     std::string streaming_url(StreamingProvider provider) const;
 
     // streaming_urls returns all providers with a lis.tn redirect URL.
@@ -274,7 +278,9 @@ struct Stream {
 // RecognizeOptions controls the standard recognize endpoint.
 struct RecognizeOptions {
     // return_metadata is the list of metadata sources to include.
-    // Valid values: "apple_music", "spotify", "deezer", "napster", "musicbrainz".
+    // Valid values: "apple_music", "spotify", "deezer", "musicbrainz". The
+    // server ignores any other value and sends a warning that reaches
+    // ClientConfig::on_deprecation.
     std::vector<std::string> return_metadata;
     // market is the ISO country code (server default: "us").
     std::string market;

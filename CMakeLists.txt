@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.16)
-project(audd-cpp VERSION 1.5.17 LANGUAGES CXX)
+project(audd-cpp VERSION 1.5.18 LANGUAGES CXX)
 
 # ---------- options ----------
 option(AUDD_CXX20           "Build with C++20 instead of C++17"        OFF)
@@ -9,8 +9,8 @@ option(AUDD_BUILD_EXAMPLES  "Build runnable examples"                  OFF)
 option(AUDD_BUILD_TESTS     "Build the doctest-based test suite"       OFF)
 option(AUDD_INSTALL         "Generate install + CMake config rules"    ON)
 option(AUDD_INSTALL_VENDORED_JSON
-       "Install the bundled nlohmann/json headers (under include/audd/third_party). \
-Leave OFF to use a system/user-provided nlohmann/json"                 OFF)
+       "Install the bundled nlohmann/json headers (under include/audd/third_party), \
+the copy the library is built against. Set OFF to provide your own nlohmann/json" ON)
 
 if(AUDD_CXX20)
     set(CMAKE_CXX_STANDARD 20)
@@ -142,6 +142,9 @@ if(AUDD_BUILD_TESTS)
         ${AUDD_VENDOR_INCLUDE}/doctest
         ${AUDD_VENDOR_INCLUDE}/cpp-httplib
         ${CMAKE_CURRENT_SOURCE_DIR}/src)
+    # Copies of the shared response fixtures from the audd-openapi repository.
+    target_compile_definitions(audd_tests PRIVATE
+        AUDD_TEST_FIXTURES_DIR="${CMAKE_CURRENT_SOURCE_DIR}/tests/fixtures")
     add_test(NAME audd_tests COMMAND audd_tests)
 endif()
 
@@ -151,9 +154,8 @@ if(AUDD_INSTALL)
     include(CMakePackageConfigHelpers)
 
     install(DIRECTORY include/audd DESTINATION ${CMAKE_INSTALL_INCLUDEDIR})
-    # Only install the bundled nlohmann/json when explicitly requested, and
-    # under include/audd/third_party so it never clobbers a system/user copy
-    # in the global include root.
+    # The bundled nlohmann/json goes under include/audd/third_party, so it
+    # never clobbers a system/user copy in the global include root.
     if(AUDD_INSTALL_VENDORED_JSON)
         install(DIRECTORY vendor/nlohmann
                 DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}/audd/third_party)

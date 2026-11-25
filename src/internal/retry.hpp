@@ -33,8 +33,8 @@ enum class RetryGate {
 // Linear-doubling backoff between attempts.
 //
 // max_attempts == 1 disables retry entirely: the first AudDConnectionError
-// is rethrown immediately. Used by metered endpoints (custom_catalog().add)
-// where a silent re-upload could double-charge for the same fingerprinting.
+// is rethrown immediately. custom_catalog().add uses it: an upload is sent
+// once and never retried automatically.
 //
 // Non-AudDConnectionError exceptions (including AudDApiError on a 5xx
 // response) propagate on the first attempt. HTTP-status retry is not

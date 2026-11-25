@@ -1,0 +1,10 @@
+{
+  "status": "-",
+  "notification": {
+    "radio_id": 3,
+    "stream_running": false,
+    "notification_code": 650,
+    "notification_message": "Recognition failed: can't connect to the audiostream"
+  },
+  "time": 1587939136
+}

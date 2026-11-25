@@ -5,48 +5,26 @@
 
 #include <atomic>
 #include <chrono>
+#include <mutex>
 #include <string>
 #include <thread>
+#include <vector>
 
 #include <curl/curl.h>
-#include <httplib.h>
 
 #include <audd/error.hpp>
 #include "internal/http_client.hpp"
 #include "internal/retry.hpp"
+#include "test_support.hpp"
 
 using audd::internal::failure_is_pre_upload;
 using audd::internal::FileField;
 using audd::internal::FormFields;
+using audd::internal::GetOptions;
 using audd::internal::HttpClient;
 using audd::internal::retry_on_connection_error;
 using audd::internal::RetryGate;
-
-namespace {
-
-// Spins up a local httplib server on an ephemeral port and returns it plus the
-// chosen port. Caller stops it.
-struct LocalServer {
-    httplib::Server srv;
-    std::thread     thread;
-    int             port = 0;
-
-    ~LocalServer() {
-        srv.stop();
-        if (thread.joinable()) thread.join();
-    }
-    void start() {
-        port = srv.bind_to_any_port("127.0.0.1");
-        thread = std::thread([this] { srv.listen_after_bind(); });
-        // Wait for the listener to come up.
-        for (int i = 0; i < 200 && !srv.is_running(); ++i) {
-            std::this_thread::sleep_for(std::chrono::milliseconds(5));
-        }
-    }
-    std::string base() const { return "http://127.0.0.1:" + std::to_string(port); }
-};
-
-} // namespace
+using audd_test::LocalServer;
 
 TEST_CASE("post_form_connect_error_no_crash") {
     // 127.0.0.1:9 (discard) refuses connections. A multipart upload that
@@ -234,4 +212,78 @@ TEST_CASE("get_success_roundtrip") {
     CHECK(resp.http_status == 200);
     REQUIRE(resp.json_body.is_object());
     CHECK(resp.json_body.value("status", std::string{}) == "success");
+}
+
+TEST_CASE("get adds api_token unless send_token is false") {
+    std::mutex mu;
+    std::vector<std::string> targets;
+    LocalServer server;
+    server.srv.Get("/q", [&](const httplib::Request& req, httplib::Response& res) {
+        {
+            std::lock_guard<std::mutex> lk(mu);
+            targets.push_back(req.target);
+        }
+        res.set_content("{}", "application/json");
+    });
+    server.start();
+    REQUIRE(server.port != 0);
+
+    HttpClient client("secret-token-123", std::chrono::milliseconds(5000));
+    client.get(server.base() + "/q", {{"category", "abc"}});
+    GetOptions no_token;
+    no_token.send_token = false;
+    client.get(server.base() + "/q", {{"category", "abc"}}, no_token);
+
+    std::lock_guard<std::mutex> lk(mu);
+    REQUIRE(targets.size() == 2);
+    CHECK(targets[0].find("api_token=secret-token-123") != std::string::npos);
+    CHECK(targets[1].find("api_token") == std::string::npos);
+    CHECK(targets[1].find("secret-token-123") == std::string::npos);
+    CHECK(targets[1].find("category=abc") != std::string::npos);
+}
+
+TEST_CASE("get stops a waiting request once the abort flag is set") {
+    std::atomic<bool> release{false};
+    LocalServer server;
+    server.srv.Get("/hold", [&](const httplib::Request&, httplib::Response& res) {
+        audd_test::wait_until([&] { return release.load(); }, std::chrono::seconds(10));
+        res.set_content("{}", "application/json");
+    });
+    server.start();
+    REQUIRE(server.port != 0);
+
+    HttpClient client("", std::chrono::milliseconds(20000));
+    std::atomic<bool> abort{false};
+    GetOptions opts;
+    opts.abort = &abort;
+    std::thread setter([&] {
+        std::this_thread::sleep_for(std::chrono::milliseconds(200));
+        abort.store(true);
+    });
+    const auto start = std::chrono::steady_clock::now();
+    CHECK_THROWS_AS(client.get(server.base() + "/hold", {}, opts), audd::AudDConnectionError);
+    const auto elapsed = std::chrono::steady_clock::now() - start;
+    setter.join();
+    release.store(true);
+    CHECK(elapsed < std::chrono::seconds(3));
+}
+
+TEST_CASE("get honours a per-request timeout") {
+    std::atomic<bool> release{false};
+    LocalServer server;
+    server.srv.Get("/hold", [&](const httplib::Request&, httplib::Response& res) {
+        audd_test::wait_until([&] { return release.load(); }, std::chrono::seconds(10));
+        res.set_content("{}", "application/json");
+    });
+    server.start();
+    REQUIRE(server.port != 0);
+
+    HttpClient client("", std::chrono::milliseconds(20000));
+    GetOptions opts;
+    opts.timeout = std::chrono::milliseconds(300);
+    const auto start = std::chrono::steady_clock::now();
+    CHECK_THROWS_AS(client.get(server.base() + "/hold", {}, opts), audd::AudDConnectionError);
+    const auto elapsed = std::chrono::steady_clock::now() - start;
+    release.store(true);
+    CHECK(elapsed < std::chrono::seconds(3));
 }

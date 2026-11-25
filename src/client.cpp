@@ -133,15 +133,39 @@ void apply_enterprise_opts(internal::FormFields& f, const EnterpriseOptions& opt
     f.data["accurate_offsets"] = opts.accurate_offsets.value_or(true) ? "true" : "false";
 }
 
-// Retry helper now lives in internal/retry.hpp so tests can verify the
-// per-call invariant directly.
+// Retry helper lives in internal/retry.hpp so tests can verify the per-call
+// invariant directly.
 using internal::retry_on_connection_error;
+using internal::decode_or_throw;
 
-// Inspect an HTTP response and return the parsed JSON body, or throw the
-// appropriate typed error. Implements the code-51 deprecation pass-through.
-nlohmann::json decode_or_throw(internal::HttpResponse& resp,
+} // anonymous
+
+namespace internal {
+
+namespace {
+
+// report_deprecation_warning passes a code-51 `warning` object on a
+// successful response ({"status":"success","result":{...},"warning":
+// {"error_code":51,"error_message":"..."}}) to the on_deprecation hook.
+void report_deprecation_warning(const nlohmann::json& body,
+                                const std::function<void(const std::string&)>& on_deprecation) {
+    auto warn_it = body.find("warning");
+    if (warn_it == body.end() || !warn_it->is_object()) return;
+    auto code_it = warn_it->find("error_code");
+    if (code_it == warn_it->end()) return;
+    auto code = coerce_int(*code_it);
+    if (!code || *code != kDeprecatedParamsCode) return;
+    std::string msg;
+    auto msg_it = warn_it->find("error_message");
+    if (msg_it != warn_it->end()) msg = coerce_string(*msg_it).value_or("");
+    if (on_deprecation) on_deprecation(msg);
+}
+
+} // anonymous
+
+nlohmann::json decode_or_throw(HttpResponse& resp,
                                const std::function<void(const std::string&)>& on_deprecation,
-                               bool custom_catalog_context = false) {
+                               bool custom_catalog_context) {
     if (resp.json_body.is_null()) {
         if (resp.http_status >= kHttpClientErrorFloor) {
             AudDApiError e(0, "HTTP " + std::to_string(resp.http_status) +
@@ -174,9 +198,12 @@ nlohmann::json decode_or_throw(internal::HttpResponse& resp,
         std::string status;
         try { status = body.value("status", std::string()); } catch (...) {}
         if (status == "error") {
-            internal::raise_from_error_response(body, resp.http_status, resp.request_id, custom_catalog_context);
+            raise_from_error_response(body, resp.http_status, resp.request_id, custom_catalog_context);
         }
-        if (status == "success") return body;
+        if (status == "success") {
+            report_deprecation_warning(body, on_deprecation);
+            return body;
+        }
         AudDApiError e(0, "Unexpected response status: " + status,
                        resp.http_status, resp.request_id);
         e.raw_response = resp.raw_body;
@@ -188,7 +215,7 @@ nlohmann::json decode_or_throw(internal::HttpResponse& resp,
     throw e;
 }
 
-} // anonymous
+} // namespace internal
 
 // AudD::Internal helpers — declared in src/internal/client_internal.hpp.
 nlohmann::json AudD::Internal::post_form(const std::string& url,
@@ -297,9 +324,9 @@ AudD::recognize(const Source& source, const RecognizeOptions& opts) {
                           std::chrono::milliseconds(0), 0);
     internal::HttpResponse resp;
     try {
-        // Metered upload: retry only failures that provably happened before
-        // the body was sent, so a request the server may have already billed
-        // is never re-submitted.
+        // Metered recognition: retry only failures that provably happened
+        // before the body was sent, so a request the server may have already
+        // billed is never re-submitted.
         resp = retry_on_connection_error(internal_->config.max_attempts, internal_->config.backoff_factor,
             [&]() -> internal::HttpResponse {
                 auto fields = reopen();
@@ -340,7 +367,7 @@ AudD::recognize_enterprise(const Source& source, const EnterpriseOptions& opts) 
                           std::chrono::milliseconds(0), 0);
     internal::HttpResponse resp;
     try {
-        // Metered upload — same pre-upload-only retry gate as recognize().
+        // Metered recognition — same pre-upload-only retry gate as recognize().
         resp = retry_on_connection_error(internal_->config.max_attempts, internal_->config.backoff_factor,
             [&]() -> internal::HttpResponse {
                 auto fields = reopen();
@@ -409,8 +436,18 @@ AdvancedClient& AudD::advanced() {
 
 namespace {
 
+// lis_tn_key is the `lis.tn/<id>?<key>` redirect key for a provider, or
+// nullptr when lis.tn has no redirect for it.
+const char* lis_tn_key(StreamingProvider p) noexcept {
+    switch (p) {
+        case StreamingProvider::AppleMusic: return "apple";
+        case StreamingProvider::Napster:    return nullptr;
+        default:                            return streaming_provider_name(p);
+    }
+}
+
 std::string lis_tn_streaming_url(const std::string& song_link, const char* qparam) {
-    if (song_link.empty()) return "";
+    if (song_link.empty() || qparam == nullptr) return "";
     auto host_start = song_link.find("//");
     if (host_start == std::string::npos) return "";
     host_start += 2;
@@ -455,7 +492,7 @@ std::string RecognitionResult::streaming_url(StreamingProvider provider) const {
         }
     }
     // fallback: lis.tn redirect
-    return lis_tn_streaming_url(song_link, streaming_provider_name(provider));
+    return lis_tn_streaming_url(song_link, lis_tn_key(provider));
 }
 
 std::map<StreamingProvider, std::string> RecognitionResult::streaming_urls() const {
@@ -503,7 +540,7 @@ std::string EnterpriseMatch::thumbnail_url() const {
 }
 
 std::string EnterpriseMatch::streaming_url(StreamingProvider provider) const {
-    return lis_tn_streaming_url(song_link, streaming_provider_name(provider));
+    return lis_tn_streaming_url(song_link, lis_tn_key(provider));
 }
 
 std::map<StreamingProvider, std::string> EnterpriseMatch::streaming_urls() const {

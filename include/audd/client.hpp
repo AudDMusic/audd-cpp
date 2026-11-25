@@ -36,16 +36,17 @@ struct AudDEvent {
 };
 
 // ClientConfig bundles the optional knobs accepted by AudD's constructor.
-// Defaults match audd-go: 3 attempts, 500ms backoff, 90s standard /
+// Defaults match audd-go: 3 attempts, 500ms backoff, 60s standard /
 // 1h enterprise timeouts, deprecation-warning logged via std::cerr.
 struct ClientConfig {
-    std::chrono::milliseconds standard_timeout   {std::chrono::seconds(90)};
+    std::chrono::milliseconds standard_timeout   {std::chrono::seconds(60)};
     std::chrono::milliseconds enterprise_timeout {std::chrono::hours(1)};
     int                       max_attempts   = 3;
     std::chrono::milliseconds backoff_factor {std::chrono::milliseconds(500)};
 
-    // on_deprecation is called when the server returns a code-51 deprecation
-    // warning alongside a usable result. Default writes to std::cerr.
+    // on_deprecation is called with the server's message when a successful
+    // response carries a code-51 warning (a deprecated or unknown parameter,
+    // such as a typo in return_metadata). Default writes to std::cerr.
     std::function<void(const std::string&)> on_deprecation;
     // on_event is called for every API-call lifecycle event (request /
     // response / exception). Off by default.

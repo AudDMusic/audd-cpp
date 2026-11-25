@@ -41,7 +41,13 @@ int main(int argc, char** argv) {
     }
 
     auto category = client.streams().derive_longpoll_category(radio_id);
-    auto poll = client.streams().longpoll(category);
+    audd::LongpollPoll poll;
+    try {
+        poll = client.streams().longpoll(category);
+    } catch (const audd::AudDError& e) {
+        std::cerr << "audd: " << e.what() << "\n";
+        return 1;
+    }
     poll.run(
         [&](audd::StreamCallbackMatch m) {
             out << csv_escape(m.timestamp) << ',' << m.radio_id << ','

@@ -3,9 +3,11 @@
 
 #include <audd/streams.hpp>
 
+#include <chrono>
 #include <map>
 #include <stdexcept>
 #include <string>
+#include <utility>
 
 #include <audd/client.hpp>
 #include <audd/error.hpp>
@@ -13,6 +15,7 @@
 #include "internal/client_internal.hpp"
 #include "internal/http_client.hpp"
 #include "internal/json_parse.hpp"
+#include "internal/longpoll_internal.hpp"
 
 namespace audd {
 
@@ -140,23 +143,31 @@ std::string StreamsClient::derive_longpoll_category(int radio_id) const {
 
 LongpollPoll StreamsClient::longpoll(const std::string& category,
                                      const LongpollOptions& opts) {
-    if (!opts.skip_callback_check) {
+    // The preflight needs the api_token; a tokenless consumer (one that was
+    // handed a category) skips it.
+    if (!opts.skip_callback_check && !parent_->api_token().empty()) {
         try {
             (void)get_callback_url();
         } catch (const AudDApiError& e) {
             if (e.error_code == kNoCallbackErrorCode) {
-                AudDApiError translated(0, kPreflightHint, e.http_status, e.request_id);
+                AudDInvalidRequestError translated(0, kPreflightHint, e.http_status, e.request_id);
+                translated.raw_response = e.raw_response;
                 throw translated;
             }
             throw;
         }
     }
-    // The actual implementation lives in longpoll.cpp; we expose a factory
-    // that takes the parent + parameters.
-    extern LongpollPoll start_longpoll_(AudD* parent,
-                                        std::string category,
-                                        LongpollOptions opts);
-    return start_longpoll_(parent_, category, opts);
+    internal::LongpollWorkerConfig cfg;
+    cfg.http            = parent_->internal()->standard_http.get();
+    cfg.url             = std::string(kApiBase) + "/longpoll/";
+    cfg.category        = category;
+    cfg.since_time      = opts.since_time;
+    cfg.timeout_seconds = opts.timeout_seconds > 0 ? opts.timeout_seconds : 50;
+    // The server holds each request for up to timeout_seconds; allow a
+    // margin on top so a held request isn't cut short.
+    cfg.request_timeout = std::chrono::seconds(static_cast<long long>(cfg.timeout_seconds) + 15);
+    cfg.on_transient_error = opts.on_transient_error;
+    return internal::start_longpoll_worker(std::move(cfg));
 }
 
 LongpollPoll StreamsClient::longpoll(int radio_id, const LongpollOptions& opts) {

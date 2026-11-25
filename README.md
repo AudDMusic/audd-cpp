@@ -9,11 +9,29 @@ The API itself is so simple that it can easily be used even without an SDK: [doc
 
 ## Hello, AudD
 
+Requires a C++17 compiler and libcurl (Ubuntu: `apt install libcurl4-openssl-dev`; macOS: `brew install curl`). Add the SDK to your CMake project:
+
 ```cmake
 # CMakeLists.txt
-find_package(audd CONFIG REQUIRED)
+include(FetchContent)
+FetchContent_Declare(audd
+    GIT_REPOSITORY https://github.com/AudDMusic/audd-cpp.git
+    GIT_TAG        v1.5.18
+)
+FetchContent_MakeAvailable(audd)
 target_link_libraries(your_app PRIVATE audd::audd)
 ```
+
+To install it once for every project instead:
+
+```sh
+git clone --branch v1.5.18 https://github.com/AudDMusic/audd-cpp.git
+cmake -S audd-cpp -B audd-cpp/build
+cmake --build audd-cpp/build
+sudo cmake --install audd-cpp/build
+```
+
+Then use `find_package(audd CONFIG REQUIRED)` in place of the `FetchContent` lines.
 
 Get your API token at [dashboard.audd.io](https://dashboard.audd.io).
 
@@ -26,12 +44,17 @@ Identify a song hosted at a URL:
 int main() {
     audd::AudD client("your-api-token"); // get a real token at dashboard.audd.io
 
-    auto result = client.recognize("https://audd.tech/example.mp3");
-    if (!result) {
-        std::cout << "no match\n";
-        return 0;
+    try {
+        auto result = client.recognize("https://audd.tech/example.mp3");
+        if (!result) {
+            std::cout << "no match\n";
+            return 0;
+        }
+        std::cout << result->artist << " - " << result->title << "\n";
+    } catch (const audd::AudDError& e) {
+        std::cerr << e.what() << "\n"; // e.g. "[#900] ..." for an invalid token
+        return 1;
     }
-    std::cout << result->artist << " - " << result->title << "\n";
 }
 ```
 
@@ -45,7 +68,7 @@ auto result = client.recognize(audd::SourceFilePath{"/path/to/clip.mp3"});
 
 Every blocking method has an `_async` twin returning `std::future`: `recognize_async`, `recognize_enterprise_async`, `streams().add_async`, etc. Reach for the future-based form when you want non-blocking dispatch from a UI thread or want to fan out concurrent calls. Keep the `AudD` client alive until every future has completed — the async work borrows the client. The same applies to `streams().longpoll(...)`: keep the client alive until the poll is stopped.
 
-Requires a C++17 compiler and libcurl. The library is single-target (`audd::audd`); link it and `#include <audd/audd.hpp>`.
+The library is single-target (`audd::audd`); link it and `#include <audd/audd.hpp>`.
 
 ## Authentication
 
@@ -141,7 +164,7 @@ Typed parameters win on collision.
 
 ## Errors
 
-Every error from this SDK derives from `audd::AudDError`. Discriminate by category:
+Every error from the API or the network derives from `audd::AudDError`. A mistake in the arguments themselves throws `std::invalid_argument`: a `recognize()` string that is neither an `http(s)://` URL nor an existing file, or an empty token passed to `set_api_token()`. Discriminate `AudDError` by category:
 
 ```cpp
 try {
@@ -186,10 +209,10 @@ Categories: `Authentication`, `Quota`, `Subscription`, `CustomCatalogAccess`, `I
 
 ```cpp
 audd::ClientConfig cfg;
-cfg.max_attempts        = 5;
-cfg.backoff_factor      = std::chrono::seconds(1);
-cfg.standard_timeout    = std::chrono::minutes(2);
-cfg.enterprise_timeout  = std::chrono::hours(2);
+cfg.max_attempts        = 5;                         // default 3
+cfg.backoff_factor      = std::chrono::seconds(1);   // default 500 ms
+cfg.standard_timeout    = std::chrono::minutes(2);   // default 60 s
+cfg.enterprise_timeout  = std::chrono::hours(2);     // default 1 h
 cfg.on_event = [](const audd::AudDEvent& e) {
     // see Observability
 };
@@ -231,9 +254,15 @@ audd::SetCallbackUrlOptions opts;
 opts.return_metadata = {"apple_music", "spotify"};
 streams.set_callback_url("https://your.app/audd/callback", opts);
 
-// 2. Add streams to monitor.
-streams.add({.url = "https://example.com/radio.m3u8", .radio_id = 1});
-streams.add({.url = "twitch:somechannel",            .radio_id = 2});
+// 2. Add streams to monitor. radio_id is any integer you choose.
+audd::AddStreamRequest stream;
+stream.url      = "https://example.com/radio.m3u8";
+stream.radio_id = 1;
+streams.add(stream);
+
+stream.url      = "twitch:somechannel";
+stream.radio_id = 2;
+streams.add(stream);
 
 // 3. Inspect what you have configured.
 for (const auto& s : streams.list()) {
@@ -282,9 +311,11 @@ poll.run(
     },
     [](std::exception_ptr ep) {
         try { std::rethrow_exception(ep); }
-        catch (const std::exception& e) { std::cerr << "longpoll: " << e.what(); }
+        catch (const std::exception& e) { std::cerr << "longpoll: " << e.what() << "\n"; }
     });
 ```
+
+`run()` calls the callbacks on the thread that called it, one at a time, in the order the events arrived; an exception thrown from one propagates out of `run()`.
 
 **Blocking pull** (one event at a time, your own loop):
 
@@ -303,7 +334,20 @@ auto fut = poll.next_match_async();
 auto m = fut.get(); // std::optional<StreamCallbackMatch>; nullopt = stream closed
 ```
 
-`audd::derive_longpoll_category(token, radio_id)` is also available as a free function — useful for computing categories on a server and shipping them to a frontend without leaking the api_token.
+Each request asks only for events newer than the newest one already received. The poll keeps going through network failures and HTTP 5xx, waiting before the next try (1 second at first, doubling up to 30); pass `on_transient_error` to see those failures:
+
+```cpp
+audd::LongpollOptions opts;
+opts.on_transient_error = [](std::exception_ptr ep) { // runs on the poll's own thread
+    try { std::rethrow_exception(ep); }
+    catch (const std::exception& e) { std::cerr << "longpoll retrying: " << e.what() << "\n"; }
+};
+auto poll = client.streams().longpoll(radio_id, opts);
+```
+
+The terminal error is reserved for requests the server rejects: for example, an `opts.timeout_seconds` outside 1–120 (it sets how long the server holds each request open; default 50) ends the poll with an `audd::AudDInvalidRequestError` carrying the server's message. `poll.close()`, or the poll going out of scope, stops it within about a second, even while a request is waiting.
+
+`audd::derive_longpoll_category(token, radio_id)` is also available as a free function — useful for computing categories on a server and shipping them to a frontend without leaking the api_token. The longpoll requests themselves never carry the token, so a client constructed without one can poll such a category: `audd::AudD consumer(""); auto poll = consumer.streams().longpoll(category);`.
 
 ## Custom catalog (advanced)
 
@@ -313,6 +357,8 @@ auto m = fut.get(); // std::optional<StreamCallbackMatch>; nullopt = stream clos
 ```cpp
 client.custom_catalog().add(audio_id, audd::SourceFilePath{"/path/to/track.mp3"});
 ```
+
+`add()` is sent once and never retried automatically: check the error before sending it again (an upload to an `audio_id` that already holds a song replaces it).
 
 Custom-catalog access requires a separate subscription. Contact api@audd.io to get it enabled. Subscription failures throw `audd::AudDCustomCatalogAccessError`, which carries a long, friendlier message than the generic `Subscription` category.
 
@@ -339,6 +385,6 @@ This SDK vendors three single-header libraries to keep build setup minimal:
 - `vendor/cpp-httplib/httplib.h` — [yhirose/cpp-httplib](https://github.com/yhirose/cpp-httplib), MIT (used by examples)
 - `vendor/doctest/doctest.h` — [doctest/doctest](https://github.com/doctest/doctest), MIT (used by tests)
 
-libcurl is the one external dependency (used outbound). Ubuntu: `apt install libcurl4-openssl-dev`. macOS: `brew install curl`.
+libcurl is the one external dependency (used outbound).
 
-The public headers `#include <nlohmann/json.hpp>`, so a consumer needs it on the include path. `install` does **not** ship the bundled copy by default, to avoid clobbering a system- or user-installed nlohmann/json in the global include directory — provide your own. To install the bundled copy instead, configure with `-DAUDD_INSTALL_VENDORED_JSON=ON`; it is placed under `include/audd/third_party` and wired into the exported target's include path.
+The public headers `#include <nlohmann/json.hpp>`. `install` ships the bundled copy under `include/audd/third_party`, out of the way of any nlohmann/json in the global include directory, and puts it on the exported target's include path, so `find_package(audd)` needs nothing else and your code compiles against the same nlohmann/json (3.11.3) the library was built with. To provide your own copy of that version instead, configure with `-DAUDD_INSTALL_VENDORED_JSON=OFF`.

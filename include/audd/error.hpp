@@ -122,6 +122,21 @@ private:
     }
 };
 
+// AudDInvalidRequestError is an AudDApiError whose category is always
+// InvalidRequest. It is raised when the server rejects the request itself
+// without an AudD numeric code (error_code 0): for example a longpoll
+// `{"error": "Invalid timeout arg.  Must be 1-120."}` body, whose text lands
+// in `message`, or a longpoll started on an account with no callback URL.
+class AudDInvalidRequestError : public AudDApiError {
+public:
+    AudDInvalidRequestError(int code, std::string msg, int http_status_, std::string request_id_)
+        : AudDApiError(code, std::move(msg), http_status_, std::move(request_id_)) {}
+
+    ErrorCategory category() const noexcept override {
+        return ErrorCategory::InvalidRequest;
+    }
+};
+
 // AudDCustomCatalogAccessError is raised specifically from CustomCatalog::add
 // when the token lacks subscription access (codes 904/905 in that context).
 // Carries a long, friendlier message that disambiguates the common

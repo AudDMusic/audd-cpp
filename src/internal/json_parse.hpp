@@ -88,22 +88,6 @@ const nlohmann::json* result_array_or_null(const nlohmann::json& body);
 // only so lookalikes like `?_key=1` do not false-positive.
 bool url_query_has_key(const std::string& url, const std::string& key);
 
-// LongpollDisposition classifies what the longpoll worker should do with a
-// single completed HTTP round-trip, before the event body is parsed:
-//   Terminal  — an explicit HTTP/API error; stop the poll.
-//   KeepAlive — a keep-alive tick (has `timeout`, no event); advance and
-//               keep polling.
-//   Event     — a candidate event body; try to parse it (an unparseable or
-//               unknown body is skipped, not terminal).
-//   Skip      — nothing usable (e.g. empty body); keep polling.
-enum class LongpollDisposition { Terminal, KeepAlive, Event, Skip };
-
-// classify_longpoll_response decides the disposition for a completed request
-// from its HTTP status and parsed JSON body. Pure; never throws.
-LongpollDisposition classify_longpoll_response(int http_status,
-                                               const nlohmann::json& body,
-                                               bool body_empty);
-
 } // namespace audd::internal
 
 #endif // AUDD_INTERNAL_JSON_PARSE_HPP

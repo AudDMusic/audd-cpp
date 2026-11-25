@@ -179,12 +179,17 @@ TEST_CASE("enterprise match thumbnail_url") {
     CHECK(m.thumbnail_url() == "");
 }
 
-TEST_CASE("enterprise match streaming_urls returns all providers") {
+TEST_CASE("enterprise match streaming_urls returns every provider lis.tn redirects") {
     audd::EnterpriseMatch m;
     m.song_link = "https://lis.tn/abcd";
     auto urls = m.streaming_urls();
-    CHECK(urls.size() == 5); // spotify, apple_music, deezer, napster, youtube
+    CHECK(urls.size() == 4); // spotify, apple_music, deezer, youtube
     CHECK(urls[audd::StreamingProvider::Spotify] == "https://lis.tn/abcd?spotify");
+    CHECK(urls[audd::StreamingProvider::AppleMusic] == "https://lis.tn/abcd?apple");
+    CHECK(urls[audd::StreamingProvider::Deezer] == "https://lis.tn/abcd?deezer");
+    CHECK(urls[audd::StreamingProvider::YouTube] == "https://lis.tn/abcd?youtube");
+    CHECK(urls.count(audd::StreamingProvider::Napster) == 0);
+    CHECK(m.streaming_url(audd::StreamingProvider::Napster) == "");
 }
 
 TEST_CASE("enterprise custom-catalog match carries audio_id") {

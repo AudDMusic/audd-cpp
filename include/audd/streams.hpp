@@ -56,7 +56,9 @@ public:
     std::future<void> set_callback_url_async(std::string url,
                                              SetCallbackUrlOptions opts = {});
 
-    // get_callback_url returns the configured callback URL, or "" if none.
+    // get_callback_url returns the configured callback URL. When the account
+    // has none, the server answers with error 19, thrown as an AudDApiError
+    // with error_code 19.
     std::string get_callback_url();
     std::future<std::string> get_callback_url_async();
 
@@ -82,20 +84,23 @@ public:
 
     // longpoll starts a long-poll subscription. Returns a LongpollPoll
     // whose three streams (matches / notifications / errors) are filled by
-    // a background thread.
+    // a background thread; LongpollPoll describes the responses, retries and
+    // stopping. The poll's requests carry no api_token.
     //
     // On entry, runs a preflight get_callback_url() unless
-    // opts.skip_callback_check is set — catches the common silent-failure
-    // mode where no callback URL is configured.
+    // opts.skip_callback_check is set or this client has no api_token —
+    // catches the common silent-failure mode where no callback URL is
+    // configured, by throwing an AudDInvalidRequestError that says how to
+    // set one.
     LongpollPoll longpoll(const std::string& category,
                           const LongpollOptions& opts = {});
 
     // longpoll(int radio_id, ...) is the one-step entry point for the common
     // case where the caller has both the api_token (held by this client) and
     // a radio_id. Derives the 9-char category locally, then delegates to the
-    // category-string overload above. The string-form overload remains for
+    // category-string overload above. The string-form overload serves
     // tokenless consumers (e.g. a server hands a pre-derived category to a
-    // browser/mobile client without sharing the api_token).
+    // desktop/mobile client without sharing the api_token).
     LongpollPoll longpoll(int radio_id,
                           const LongpollOptions& opts = {});
 

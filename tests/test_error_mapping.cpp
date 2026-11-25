@@ -65,6 +65,15 @@ TEST_CASE("AudDCustomCatalogAccessError uses CustomCatalogAccess category") {
     CHECK(what.find("custom catalog") != std::string::npos);
 }
 
+TEST_CASE("AudDInvalidRequestError is an AudDApiError with InvalidRequest category") {
+    audd::AudDInvalidRequestError e(0, "Invalid timeout arg.  Must be 1-120.", 200, "req-1");
+    CHECK(e.category() == audd::ErrorCategory::InvalidRequest);
+    CHECK(e.message == "Invalid timeout arg.  Must be 1-120.");
+    const audd::AudDApiError& base = e;
+    CHECK(base.category() == audd::ErrorCategory::InvalidRequest);
+    CHECK(std::string(e.what()).find("Invalid timeout arg.") != std::string::npos);
+}
+
 TEST_CASE("AudDConnectionError has Connection category") {
     audd::AudDConnectionError e("dns failure");
     CHECK(e.category() == audd::ErrorCategory::Connection);

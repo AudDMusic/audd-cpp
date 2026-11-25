@@ -86,11 +86,10 @@ void CustomCatalogClient::add(int audio_id, const Source& source) {
     auto reopen = prepare_source_for_upload(source);
     auto fields = reopen();
     fields.data["audio_id"] = std::to_string(audio_id);
-    // No retry: custom-catalog uploads are metered, and auto-retry on a
-    // transient transport failure could double-charge for the same audio
-    // fingerprinting. A connect error here propagates as
-    // AudDConnectionError on the first attempt; the caller decides
-    // whether to retry.
+    // Sent once and never retried automatically: any failure, including a
+    // connect error, propagates on the first attempt. The caller checks the
+    // error before sending it again (an upload to an audio_id that already
+    // holds a song replaces it).
     parent_->internal()->post_form(std::string(kApiBase) + "/upload/", fields,
                                    /*custom_catalog_ctx*/ true,
                                    /*max_attempts*/ 1);

@@ -1,0 +1,16 @@
+{
+  "status": "success",
+  "result": {
+    "artist": "Tears For Fears",
+    "title": "Everybody Wants To Rule The World",
+    "album": "Songs From The Big Chair",
+    "release_date": "2014-11-10",
+    "label": "UMC (Universal Music Catalogue)",
+    "timecode": "00:57",
+    "song_link": "https://lis.tn/NbkVb"
+  },
+  "warning": {
+    "error_code": 51,
+    "error_message": "Recognition warning: you used deprecated or nonexistent parameters. You can send  `musicbrainz`, `apple_music`, `spotify`, `deezer` in the `return` parameter."
+  }
+}

@@ -98,6 +98,10 @@ TEST_CASE("streaming_url falls back to lis.tn redirect") {
     r.song_link = "https://lis.tn/abcd";
     CHECK(r.streaming_url(audd::StreamingProvider::Spotify) == "https://lis.tn/abcd?spotify");
     CHECK(r.streaming_url(audd::StreamingProvider::YouTube) == "https://lis.tn/abcd?youtube");
+    // lis.tn's Apple Music redirect key is `apple`; Napster has no redirect.
+    CHECK(r.streaming_url(audd::StreamingProvider::AppleMusic) == "https://lis.tn/abcd?apple");
+    CHECK(r.streaming_url(audd::StreamingProvider::Napster) == "");
+    CHECK(r.streaming_urls().count(audd::StreamingProvider::Napster) == 0);
 }
 
 TEST_CASE("streaming_url prefers direct apple_music.url") {

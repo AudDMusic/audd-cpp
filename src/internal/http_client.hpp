@@ -6,6 +6,7 @@
 #ifndef AUDD_INTERNAL_HTTP_CLIENT_HPP
 #define AUDD_INTERNAL_HTTP_CLIENT_HPP
 
+#include <atomic>
 #include <chrono>
 #include <map>
 #include <memory>
@@ -45,6 +46,20 @@ struct HttpResponse {
     std::string    request_id;    // X-Request-Id header value
 };
 
+// GetOptions adjusts a single HttpClient::get call.
+struct GetOptions {
+    // send_token=false leaves api_token out of the query string. The
+    // longpoll endpoint is authorized by its category alone, so it is called
+    // without the token.
+    bool send_token = true;
+    // timeout, when > 0, replaces the client's timeout for this request.
+    std::chrono::milliseconds timeout{0};
+    // abort, when set, is checked while the request is in flight (about once
+    // a second while waiting for the server); once it reads true the request
+    // stops and get() throws AudDConnectionError.
+    const std::atomic<bool>* abort = nullptr;
+};
+
 // HttpClient is a thin wrapper around libcurl, hiding the C handle and
 // exposing form/multipart POST + GET. Each request uses its own libcurl easy
 // handle; the api_token is guarded by a mutex so it can be rotated safely
@@ -63,9 +78,13 @@ public:
     // response. Adds api_token to fields.data if not already set.
     HttpResponse post_form(const std::string& url, FormFields fields);
 
-    // get executes a GET with the given query params.
+    // get executes a GET with the given query params. Adds api_token to the
+    // query unless it is already there or opts.send_token is false.
     HttpResponse get(const std::string& url,
                      const std::map<std::string, std::string>& params);
+    HttpResponse get(const std::string& url,
+                     const std::map<std::string, std::string>& params,
+                     const GetOptions& opts);
 
     // user_agent is the User-Agent string used by every request.
     static std::string user_agent();

@@ -590,19 +590,6 @@ const nlohmann::json* result_array_or_null(const nlohmann::json& body) {
     return &*it;
 }
 
-LongpollDisposition classify_longpoll_response(int http_status,
-                                               const nlohmann::json& body,
-                                               bool body_empty) {
-    if (http_status >= 400) return LongpollDisposition::Terminal;
-    if (body_empty) return LongpollDisposition::Skip;
-    // Keep-alive tick: an object carrying `timeout` and no event block.
-    if (body.is_object() && body.contains("timeout") &&
-        !body.contains("result") && !body.contains("notification")) {
-        return LongpollDisposition::KeepAlive;
-    }
-    return LongpollDisposition::Event;
-}
-
 bool url_query_has_key(const std::string& url, const std::string& key) {
     auto q = url.find('?');
     if (q == std::string::npos) return false;

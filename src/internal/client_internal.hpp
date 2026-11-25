@@ -36,9 +36,9 @@ struct AudD::Internal {
     nlohmann::json post_form(const std::string& url, internal::FormFields fields,
                              bool custom_catalog_ctx = false,
                              internal::RetryGate gate = internal::RetryGate::PreUploadOnly);
-    // post_form overload that overrides max_attempts. Used by metered
-    // endpoints (custom_catalog().add) that pass max_attempts=1 to disable
-    // retry — auto-retry on a metered upload could double-charge.
+    // post_form overload that overrides max_attempts. custom_catalog().add
+    // passes max_attempts=1: an upload is sent once and never retried
+    // automatically.
     nlohmann::json post_form(const std::string& url, internal::FormFields fields,
                              bool custom_catalog_ctx, int max_attempts,
                              internal::RetryGate gate = internal::RetryGate::PreUploadOnly);
@@ -53,6 +53,18 @@ struct AudD::Internal {
                     std::chrono::milliseconds elapsed,
                     int error_code);
 };
+
+namespace internal {
+
+// decode_or_throw returns the parsed body of a `status: success` response,
+// or throws the matching typed error. A code-51 warning on a successful
+// response (a top-level `warning` object, or an `error` block next to a
+// usable result) is passed to on_deprecation.
+nlohmann::json decode_or_throw(HttpResponse& resp,
+                               const std::function<void(const std::string&)>& on_deprecation,
+                               bool custom_catalog_context = false);
+
+} // namespace internal
 
 } // namespace audd
 

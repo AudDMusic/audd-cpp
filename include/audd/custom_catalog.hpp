@@ -30,6 +30,10 @@ public:
     // There is no public list/delete endpoint; track audio_id <-> song
     // mappings on your side.
     //
+    // The upload is sent once and never retried automatically, whatever
+    // ClientConfig::max_attempts says: check the error before sending it
+    // again (an upload to an audio_id that already holds a song replaces it).
+    //
     // **Reminder: this is NOT for music recognition.**
     void add(int audio_id, const Source& source);
     std::future<void> add_async(int audio_id, Source source);
